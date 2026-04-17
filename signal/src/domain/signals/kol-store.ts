@@ -1,0 +1,80 @@
+import { readFile, writeFile, mkdir } from 'node:fs/promises'
+import { resolve } from 'node:path'
+import { z } from 'zod'
+import { DATA_DIR } from '../../paths.js'
+import type { KolConfig, ChannelConfig } from '../../../../shared/types.js'
+
+// ==================== Schemas ====================
+
+export const kolConfigSchema = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1),
+  avatarPath: z.string().optional(),
+  enabled: z.boolean().default(true),
+  riskMultiplier: z.number().positive().default(1),
+  maxOpenPositions: z.number().int().min(0).default(3),
+  defaultConviction: z.number().min(0).max(1).default(0.5),
+  notes: z.string().optional(),
+  addedAt: z.string(),
+})
+
+export const channelConfigSchema = z.object({
+  id: z.string().min(1),
+  guildId: z.string().min(1),
+  label: z.string().min(1),
+  group: z.string().optional(),
+  enabled: z.boolean().default(true),
+  kolIds: z.array(z.string()).default([]),
+  parseAllMessages: z.boolean().default(false),
+  notes: z.string().optional(),
+  addedAt: z.string(),
+})
+
+export const createKolSchema = kolConfigSchema.omit({ addedAt: true })
+export const updateKolSchema = kolConfigSchema.partial().omit({ id: true, addedAt: true })
+export const createChannelSchema = channelConfigSchema.omit({ addedAt: true })
+export const updateChannelSchema = channelConfigSchema.partial().omit({ id: true, addedAt: true })
+
+// ==================== File paths ====================
+
+const KOLS_DIR = resolve(DATA_DIR, 'kols')
+const KOLS_FILE = resolve(KOLS_DIR, 'kols.json')
+const CHANNELS_FILE = resolve(KOLS_DIR, 'channels.json')
+
+async function ensureDir() {
+  await mkdir(KOLS_DIR, { recursive: true })
+}
+
+// ==================== KOLs ====================
+
+export async function readKols(): Promise<KolConfig[]> {
+  await ensureDir()
+  try {
+    const raw = await readFile(KOLS_FILE, 'utf8')
+    return JSON.parse(raw) as KolConfig[]
+  } catch {
+    return []
+  }
+}
+
+export async function writeKols(kols: KolConfig[]): Promise<void> {
+  await ensureDir()
+  await writeFile(KOLS_FILE, JSON.stringify(kols, null, 2) + '\n', 'utf8')
+}
+
+// ==================== Channels ====================
+
+export async function readChannels(): Promise<ChannelConfig[]> {
+  await ensureDir()
+  try {
+    const raw = await readFile(CHANNELS_FILE, 'utf8')
+    return JSON.parse(raw) as ChannelConfig[]
+  } catch {
+    return []
+  }
+}
+
+export async function writeChannels(channels: ChannelConfig[]): Promise<void> {
+  await ensureDir()
+  await writeFile(CHANNELS_FILE, JSON.stringify(channels, null, 2) + '\n', 'utf8')
+}

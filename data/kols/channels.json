@@ -1,0 +1,38 @@
+[
+  {
+    "id": "1381864724978860193",
+    "guildId": "1376117699771498637",
+    "label": "test",
+    "group": "测试",
+    "enabled": true,
+    "kolIds": [
+      "1103586884170563635"
+    ],
+    "parseAllMessages": false,
+    "addedAt": "2026-04-17T08:39:47.328Z"
+  },
+  {
+    "id": "1417521303275180032",
+    "guildId": "1189492691352956989",
+    "label": "nurse-neil",
+    "group": "UNITY ACADEMY",
+    "enabled": true,
+    "kolIds": [
+      "1417528451589476555"
+    ],
+    "parseAllMessages": false,
+    "addedAt": "2026-04-17T08:40:37.460Z"
+  },
+  {
+    "id": "1459524335692808356",
+    "guildId": "1189492691352956989",
+    "label": "舒琴实盘",
+    "group": "中文交易",
+    "enabled": true,
+    "kolIds": [
+      "1459527572344930348"
+    ],
+    "parseAllMessages": false,
+    "addedAt": "2026-04-17T08:45:23.727Z"
+  }
+]
