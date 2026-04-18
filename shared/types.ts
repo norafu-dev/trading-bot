@@ -68,6 +68,11 @@ export interface ChannelConfig {
   kolIds: string[]
   /** When true, every message in this channel is sent to the LLM parser. */
   parseAllMessages: boolean
+  /**
+   * Other channel IDs whose messages should be merged into this channel's view.
+   * Useful when a KOL posts entries in one channel and strategy updates in another.
+   */
+  linkedChannelIds?: string[]
   notes?: string
   addedAt: string
 }

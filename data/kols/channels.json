@@ -9,7 +9,10 @@
       "1103586884170563635"
     ],
     "parseAllMessages": false,
-    "addedAt": "2026-04-17T08:39:47.328Z"
+    "addedAt": "2026-04-17T08:39:47.328Z",
+    "linkedChannelIds": [
+      "1381864863617515570"
+    ]
   },
   {
     "id": "1417521303275180032",
@@ -45,7 +48,10 @@
       "1382776450901479484"
     ],
     "parseAllMessages": false,
-    "addedAt": "2026-04-18T05:30:34.315Z"
+    "addedAt": "2026-04-18T05:30:34.315Z",
+    "linkedChannelIds": [
+      "1361043457283592432"
+    ]
   },
   {
     "id": "1361043457283592432",
@@ -58,5 +64,18 @@
     ],
     "parseAllMessages": false,
     "addedAt": "2026-04-18T05:31:14.570Z"
+  },
+  {
+    "id": "1381864863617515570",
+    "guildId": "1376117699771498637",
+    "label": "test-co",
+    "group": "测试",
+    "enabled": true,
+    "kolIds": [
+      "1103586884170563635"
+    ],
+    "parseAllMessages": false,
+    "linkedChannelIds": [],
+    "addedAt": "2026-04-18T07:33:23.766Z"
   }
 ]

@@ -77,9 +77,12 @@ export const channelApi = {
 // ==================== Message API ====================
 
 export const messageApi = {
-  list: (channelId?: string, limit = 200) => {
+  list: (channelIds?: string | string[], limit = 200) => {
     const params = new URLSearchParams();
-    if (channelId) params.set("channelId", channelId);
+    if (channelIds) {
+      const ids = Array.isArray(channelIds) ? channelIds : [channelIds];
+      if (ids.length > 0) params.set("channelId", ids.join(","));
+    }
     params.set("limit", String(limit));
     return api<RawDiscordMessage[]>(`/messages?${params}`);
   },
@@ -105,7 +108,7 @@ export const discordApi = {
       .catch(() => ({ status: "unreachable" }) as DiscordStatus),
   reload: () => api<{ ok: boolean }>("/discord/reload", { method: "POST" }),
   export: (params: {
-    channelId: string;
+    channelIds: string[];
     authorIds: string[];
     dateFrom: string;
     dateTo: string;
@@ -119,6 +122,7 @@ export const discordApi = {
 
 export interface ExportRecord {
   messageId: string;
+  channelId: string;
   authorId: string;
   authorUsername: string;
   timestamp: string;
@@ -130,7 +134,7 @@ export interface ExportRecord {
 
 export interface ExportResult {
   ok: boolean;
-  channelId: string;
+  channelIds: string[];
   dateFrom: string;
   dateTo: string;
   total: number;

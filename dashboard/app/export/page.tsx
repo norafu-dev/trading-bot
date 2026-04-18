@@ -33,21 +33,29 @@ function downloadText(text: string, filename: string) {
 }
 
 /** Format records as plain text for pasting directly into an AI prompt. */
-function toAiText(result: ExportResult, kolMap: Map<string, string>): string {
+function toAiText(
+  result: ExportResult,
+  kolMap: Map<string, string>,
+  channelMap: Map<string, string>,
+): string {
+  const chLabels = result.channelIds
+    .map((id) => channelMap.get(id) ?? id)
+    .join(" + ");
   const lines: string[] = [
-    `=== KOL 发言导出 ===`,
-    `频道 ID : ${result.channelId}`,
-    `日期范围: ${result.dateFrom.slice(0, 10)} ~ ${result.dateTo.slice(0, 10)}`,
-    `消息数量: ${result.total}`,
+    `=== KOL \u53d1\u8a00\u5bfc\u51fa ===`,
+    `\u9891\u9053  : ${chLabels}`,
+    `\u65e5\u671f\u8303\u56f4: ${result.dateFrom.slice(0, 10)} ~ ${result.dateTo.slice(0, 10)}`,
+    `\u6d88\u606f\u6570\u91cf: ${result.total}`,
     ``,
   ];
   for (const m of result.messages) {
     const name = kolMap.get(m.authorId) ?? m.authorUsername;
+    const ch = channelMap.get(m.channelId) ?? m.channelId;
     const ts = new Date(m.timestamp).toLocaleString("zh-CN");
-    lines.push(`[${ts}] ${name}`);
+    lines.push(`[${ts}] ${name}${result.channelIds.length > 1 ? ` (${ch})` : ""}`);
     if (m.text) lines.push(m.text);
     for (const url of m.images) {
-      lines.push(`[图片] ${url}`);
+      lines.push(`[\u56fe\u7247] ${url}`);
     }
     lines.push("");
   }
@@ -82,8 +90,15 @@ export default function ExportPage() {
   }, []);
 
   const kolMap = new Map(kols.map((k) => [k.id, k.label]));
+  const channelMap = new Map(channels.map((c) => [c.id, c.label]));
 
   const selectedChannel = channels.find((c) => c.id === channelId);
+
+  // Resolve all channel IDs to fetch: main + linked
+  const exportChannelIds: string[] = channelId
+    ? [channelId, ...(selectedChannel?.linkedChannelIds ?? [])]
+    : [];
+
   // When channel changes, pre-select that channel's associated KOLs
   const handleChannelChange = useCallback((id: string) => {
     setChannelId(id);
@@ -102,11 +117,11 @@ export default function ExportPage() {
   }
 
   async function handleFetch() {
-    if (!channelId) return;
+    if (exportChannelIds.length === 0) return;
     setLoading(true); setError(null); setResult(null);
     try {
       const res = await discordApi.export({
-        channelId,
+        channelIds: exportChannelIds,
         authorIds: [...selectedKols],
         dateFrom,
         dateTo,
@@ -141,9 +156,25 @@ export default function ExportPage() {
               <option key={ch.id} value={ch.id}>{ch.label} ({ch.id})</option>
             ))}
           </select>
-          {selectedChannel?.group && (
-            <p className="mt-1 text-xs text-muted-foreground">{"\u5206\u7ec4\uff1a"}{selectedChannel.group}</p>
-          )}
+
+          {/* Show group + linked channels info */}
+          <div className="mt-1.5 flex flex-wrap items-center gap-2">
+            {selectedChannel?.group && (
+              <span className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                {"\u5206\u7ec4\uff1a"}{selectedChannel.group}
+              </span>
+            )}
+            {selectedChannel?.linkedChannelIds && selectedChannel.linkedChannelIds.length > 0 && (
+              <span className="text-xs text-muted-foreground">
+                {"\u5c06\u540c\u65f6\u91c7\u96c6\u5173\u8054\u9891\u9053\uff1a"}
+                {selectedChannel.linkedChannelIds.map((id) => (
+                  <span key={id} className="ml-1 rounded bg-secondary/60 px-2 py-0.5 font-medium text-foreground">
+                    {channelMap.get(id) ?? id}
+                  </span>
+                ))}
+              </span>
+            )}
+          </div>
         </div>
 
         {/* KOL filter */}
@@ -179,18 +210,29 @@ export default function ExportPage() {
           </div>
         </div>
 
-        {/* Limit */}
+        {/* Limit (per channel) */}
         <div>
-          <label className={labelClass}>{"\u6700\u591a\u83b7\u53d6\u6761\u6570\uff08\u6700\u5927 500\uff09"}</label>
+          <label className={labelClass}>
+            {"\u6bcf\u4e2a\u9891\u9053\u6700\u591a\u83b7\u53d6\u6761\u6570\uff08\u6700\u5927 500\uff09"}
+            {exportChannelIds.length > 1 && (
+              <span className="ml-2 normal-case font-normal text-muted-foreground">
+                {"× "}{exportChannelIds.length}{" \u4e2a\u9891\u9053"}
+              </span>
+            )}
+          </label>
           <input type="number" className={inputClass} value={limit} min={1} max={500}
             onChange={(e) => setLimit(Number(e.target.value))} />
         </div>
 
         <button
           onClick={() => void handleFetch()}
-          disabled={loading || !channelId}
+          disabled={loading || exportChannelIds.length === 0}
           className="w-full rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary-hover disabled:opacity-50">
-          {loading ? "\u91c7\u96c6\u4e2d\uff0c\u8bf7\u7a0d\u5019\u2026" : "\u5f00\u59cb\u91c7\u96c6"}
+          {loading
+            ? (exportChannelIds.length > 1
+                ? `\u6b63\u5728\u91c7\u96c6 ${exportChannelIds.length} \u4e2a\u9891\u9053\uff0c\u8bf7\u7a0d\u5019\u2026`
+                : "\u91c7\u96c6\u4e2d\uff0c\u8bf7\u7a0d\u5019\u2026")
+            : "\u5f00\u59cb\u91c7\u96c6"}
         </button>
 
         {error && (
@@ -209,11 +251,16 @@ export default function ExportPage() {
               <span className="ml-3 text-xs text-muted-foreground">
                 {result.dateFrom.slice(0, 10)} ~ {result.dateTo.slice(0, 10)}
               </span>
+              {result.channelIds.length > 1 && (
+                <span className="ml-3 text-xs text-muted-foreground">
+                  {"(\u5df2\u5408\u5e76 "}{result.channelIds.length}{" \u4e2a\u9891\u9053)"}
+                </span>
+              )}
             </div>
             <div className="flex gap-2">
               <button
                 onClick={() => downloadText(
-                  toAiText(result, kolMap),
+                  toAiText(result, kolMap, channelMap),
                   `kol-export-${channelId}-${dateFrom}-${dateTo}.txt`
                 )}
                 className="rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted transition-colors">
@@ -246,6 +293,11 @@ export default function ExportPage() {
                   <span className="text-xs text-muted-foreground">
                     {new Date(m.timestamp).toLocaleString("zh-CN")}
                   </span>
+                  {result.channelIds.length > 1 && (
+                    <span className="rounded bg-secondary/60 px-1.5 py-0.5 text-[10px] text-foreground">
+                      {channelMap.get(m.channelId) ?? m.channelId}
+                    </span>
+                  )}
                   {m.hasEmbeds && (
                     <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">embed</span>
                   )}

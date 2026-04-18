@@ -80,9 +80,11 @@ function applyRefreshedUrls(
 export function createMessageRoutes(store: MessageStore, discordToken?: string) {
   return new Hono()
     .get('/', async (c) => {
-      const channelId = c.req.query('channelId') || undefined
+      // Accept comma-separated channelId values for merged views
+      const raw = c.req.query('channelId') || undefined
+      const channelIds = raw ? raw.split(',').filter(Boolean) : undefined
       const limit = Number(c.req.query('limit') ?? 200)
-      let msgs = store.query(channelId, limit)
+      let msgs = store.query(channelIds, limit)
 
       // Refresh expired Discord CDN URLs if we have a token
       if (discordToken) {
