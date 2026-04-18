@@ -16,6 +16,10 @@ export interface RawEmbed {
   title?: string
   description?: string
   fields: Array<{ name: string; value: string }>
+  /** Direct image URL attached to this embed (embed.image.url) */
+  image?: string
+  /** Thumbnail URL attached to this embed (embed.thumbnail.url) */
+  thumbnail?: string
 }
 
 export interface RawAttachment {

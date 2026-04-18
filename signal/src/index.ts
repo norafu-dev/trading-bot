@@ -33,7 +33,7 @@ app.use('*', cors())
 
 app.route('/api', createKolChannelRoutes(listener))
 app.route('/api/discord', createDiscordRoutes(listener, messageStore))
-app.route('/api/messages', createMessageRoutes(messageStore))
+app.route('/api/messages', createMessageRoutes(messageStore, DISCORD_TOKEN))
 
 serve({ fetch: app.fetch, port: PORT }, (info) => {
   console.log(`[Signal] Server running on http://localhost:${info.port}`)

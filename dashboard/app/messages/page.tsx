@@ -30,6 +30,15 @@ function authorColor(id: string): string {
   return colors[n % colors.length];
 }
 
+/** Strip Discord mention tokens: <@ID> <@!ID> <@&ID> <#ID> <:emoji:ID> <a:emoji:ID> */
+function stripMentions(text: string): string {
+  return text
+    .replace(/<@[!&]?\d+>/g, "")   // user / role mentions
+    .replace(/<#\d+>/g, "")         // channel mentions
+    .replace(/<a?:\w+:\d+>/g, "")   // custom emoji
+    .trim();
+}
+
 function formatTime(iso: string): string {
   const d = new Date(iso);
   const now = new Date();
@@ -278,9 +287,9 @@ export default function MessagesPage() {
                         </div>
                       )}
 
-                      {msg.content && (
-                        <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">{msg.content}</p>
-                      )}
+                      {(() => { const txt = stripMentions(msg.content); return txt ? (
+                        <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">{txt}</p>
+                      ) : null; })()}
 
                       {msg.embeds.map((embed, ei) => (
                         <div key={ei} className="mt-1.5 max-w-lg rounded-lg border-l-4 border-primary bg-muted px-3 py-2.5">
@@ -295,6 +304,20 @@ export default function MessagesPage() {
                                 </div>
                               ))}
                             </div>
+                          )}
+                          {embed.image && (
+                            <a href={embed.image} target="_blank" rel="noreferrer" className="mt-2 block">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img src={embed.image} alt="embed image"
+                                className="max-h-80 max-w-full rounded-md border border-border object-contain shadow-sm" />
+                            </a>
+                          )}
+                          {embed.thumbnail && (
+                            <a href={embed.thumbnail} target="_blank" rel="noreferrer" className="mt-2 block">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img src={embed.thumbnail} alt="thumbnail"
+                                className="max-h-48 max-w-full rounded-md border border-border object-contain shadow-sm" />
+                            </a>
                           )}
                         </div>
                       ))}
