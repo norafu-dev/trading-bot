@@ -34,5 +34,29 @@
     ],
     "parseAllMessages": false,
     "addedAt": "2026-04-17T08:45:23.727Z"
+  },
+  {
+    "id": "1361043391944724749",
+    "guildId": "1189492691352956989",
+    "label": "开仓策略",
+    "group": "WWG",
+    "enabled": true,
+    "kolIds": [
+      "1382776450901479484"
+    ],
+    "parseAllMessages": false,
+    "addedAt": "2026-04-18T05:30:34.315Z"
+  },
+  {
+    "id": "1361043457283592432",
+    "guildId": "1189492691352956989",
+    "label": "策略跟踪",
+    "group": "WWG",
+    "enabled": true,
+    "kolIds": [
+      "1382776450901479484"
+    ],
+    "parseAllMessages": false,
+    "addedAt": "2026-04-18T05:31:14.570Z"
   }
 ]

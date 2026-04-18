@@ -28,5 +28,15 @@
     "defaultConviction": 0.5,
     "addedAt": "2026-04-17T08:46:28.462Z",
     "avatarPath": "avatars/1459527572344930348.png"
+  },
+  {
+    "id": "1382776450901479484",
+    "label": "Johnny",
+    "enabled": true,
+    "riskMultiplier": 1,
+    "maxOpenPositions": 3,
+    "defaultConviction": 0.5,
+    "addedAt": "2026-04-18T05:26:46.209Z",
+    "avatarPath": "avatars/1382776450901479484.png"
   }
 ]
