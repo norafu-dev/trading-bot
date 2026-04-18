@@ -3,17 +3,22 @@ import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import type { DiscordListener } from '../connectors/discord/listener.js'
 import type { MessageStore } from '../domain/signals/message-store.js'
+import type { RawDiscordMessage } from '../../../shared/types.js'
 import { buildParserInput } from '../domain/signals/message-cleaner.js'
 
 const exportSchema = z.object({
-  channelId: z.string().min(1),
+  /**
+   * One or more channel IDs to fetch. When multiple IDs are provided the
+   * results are merged and sorted by timestamp (useful for linked channels).
+   */
+  channelIds: z.array(z.string().min(1)).min(1),
   /** Discord user IDs of KOLs to filter. Empty array = all authors. */
   authorIds: z.array(z.string()).default([]),
   /** ISO date string, start of range (inclusive) */
   dateFrom: z.string().datetime({ offset: true }).or(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)),
   /** ISO date string, end of range (inclusive) */
   dateTo: z.string().datetime({ offset: true }).or(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)),
-  /** Max messages to fetch (default 500) */
+  /** Max messages to fetch per channel (default 200, max 500) */
   limit: z.number().int().min(1).max(500).default(200),
 })
 
@@ -53,16 +58,26 @@ export function createDiscordRoutes(listener: DiscordListener | null, store: Mes
         return c.json({ ok: false, message: 'dateFrom must be before dateTo' }, 400)
       }
 
-      const messages = await listener.fetchHistory({
-        channelId: body.channelId,
-        authorIds: body.authorIds,
-        dateFrom,
-        dateTo,
-        limit: body.limit,
-      })
+      // Fetch each channel sequentially (keeps inter-request delay intact)
+      const allMessages: RawDiscordMessage[] = []
+      for (const cid of body.channelIds) {
+        const msgs = await listener.fetchHistory({
+          channelId: cid,
+          authorIds: body.authorIds,
+          dateFrom,
+          dateTo,
+          limit: body.limit,
+        })
+        allMessages.push(...msgs)
+      }
+
+      // Merge and sort by timestamp ascending
+      allMessages.sort(
+        (a, b) => new Date(a.receivedAt).getTime() - new Date(b.receivedAt).getTime(),
+      )
 
       // Build AI-ready export records
-      const records = messages.map((m) => {
+      const records = allMessages.map((m) => {
         // Collect all image URLs: embed image/thumbnail + file attachments
         const images: string[] = []
         for (const e of m.embeds) {
@@ -77,6 +92,7 @@ export function createDiscordRoutes(listener: DiscordListener | null, store: Mes
 
         return {
           messageId:      m.messageId,
+          channelId:      m.channelId,
           authorId:       m.authorId,
           authorUsername: m.authorUsername,
           timestamp:      m.receivedAt,
@@ -92,7 +108,7 @@ export function createDiscordRoutes(listener: DiscordListener | null, store: Mes
 
       return c.json({
         ok: true,
-        channelId:  body.channelId,
+        channelIds: body.channelIds,
         dateFrom:   dateFrom.toISOString(),
         dateTo:     dateTo.toISOString(),
         total:      records.length,

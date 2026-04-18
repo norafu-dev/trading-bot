@@ -30,9 +30,13 @@ export class MessageStore {
     await appendFile(MESSAGES_FILE, JSON.stringify(msg) + '\n', 'utf8')
   }
 
-  query(channelId?: string, limit = 200): RawDiscordMessage[] {
+  /** Accept a single channelId or an array (for merged views). */
+  query(channelIds?: string | string[], limit = 200): RawDiscordMessage[] {
     let msgs = this.messages
-    if (channelId) msgs = msgs.filter((m) => m.channelId === channelId)
+    if (channelIds) {
+      const ids = Array.isArray(channelIds) ? channelIds : [channelIds]
+      if (ids.length > 0) msgs = msgs.filter((m) => ids.includes(m.channelId))
+    }
     return msgs.slice(-limit)
   }
 

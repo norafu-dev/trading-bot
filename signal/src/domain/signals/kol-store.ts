@@ -26,6 +26,7 @@ export const channelConfigSchema = z.object({
   enabled: z.boolean().default(true),
   kolIds: z.array(z.string()).default([]),
   parseAllMessages: z.boolean().default(false),
+  linkedChannelIds: z.array(z.string()).default([]),
   notes: z.string().optional(),
   addedAt: z.string(),
 })

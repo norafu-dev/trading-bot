@@ -94,10 +94,18 @@ export default function MessagesPage() {
 
   const refresh = useCallback(async () => {
     try {
-      const msgs = await messageApi.list(selectedChannel ?? undefined);
+      // Resolve linked channels for the selected channel (Option A: merged view)
+      let channelIds: string | string[] | undefined = selectedChannel ?? undefined;
+      if (selectedChannel) {
+        const ch = channels.find((c) => c.id === selectedChannel);
+        if (ch?.linkedChannelIds && ch.linkedChannelIds.length > 0) {
+          channelIds = [selectedChannel, ...ch.linkedChannelIds];
+        }
+      }
+      const msgs = await messageApi.list(channelIds);
       setMessages(msgs);
     } catch { /* offline */ }
-  }, [selectedChannel]);
+  }, [selectedChannel, channels]);
 
   useEffect(() => {
     channelApi.list().then((list) => setChannels(applyChOrder(list, loadChOrder()))).catch(() => {});
@@ -165,6 +173,10 @@ export default function MessagesPage() {
   const channelMap = new Map(channels.map((c) => [c.id, c]));
   const kolMap = new Map(kols.map((k) => [k.id, k]));
   const msgGroups = groupMessages(messages);
+
+  // Show channel source badge when viewing "all" or a merged channel view
+  const selectedCh = selectedChannel ? channelMap.get(selectedChannel) : null;
+  const isMergedView = !selectedChannel || (selectedCh?.linkedChannelIds && selectedCh.linkedChannelIds.length > 0);
 
   const statusDot =
     discordStatus?.status === "connected" ? "bg-success" :
@@ -260,7 +272,7 @@ export default function MessagesPage() {
                   <div className="flex items-baseline gap-2">
                     <span className="text-sm font-semibold" style={{ color: authorColor(group.authorId) }}>{displayName}</span>
                     <span className="text-xs text-muted-foreground">{formatTime(group.messages[0].receivedAt)}</span>
-                    {selectedChannel === null && (
+                    {isMergedView && (
                       <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
                         {channelMap.get(group.messages[0].channelId)?.label ?? group.messages[0].channelId}
                       </span>
