@@ -1,7 +1,26 @@
-import { Client } from 'discord.js-selfbot-v13'
-import type { Message } from 'discord.js-selfbot-v13'
+import { Client, Collection } from 'discord.js-selfbot-v13'
+import type { Message, TextChannel, MessageEmbed, MessageAttachment } from 'discord.js-selfbot-v13'
 import type { RawDiscordMessage, RawReference, ChannelConfig } from '../../../../shared/types.js'
 import { readChannels, readKols } from '../../domain/signals/kol-store.js'
+
+// ── Discord snowflake helpers ────────────────────────────────────────────────
+const DISCORD_EPOCH = 1420070400000n
+
+/** Convert a JS Date to the smallest Discord snowflake ID at that moment. */
+function dateToSnowflake(date: Date): string {
+  const ms = BigInt(date.getTime()) - DISCORD_EPOCH
+  return (ms << 22n).toString()
+}
+
+export interface FetchHistoryOptions {
+  channelId: string
+  /** Filter by these Discord user IDs. Empty = all authors. */
+  authorIds?: string[]
+  dateFrom: Date
+  dateTo: Date
+  /** Max messages to return (default 500, hard cap 2000). */
+  limit?: number
+}
 
 // ==================== Types ====================
 
@@ -89,6 +108,84 @@ export class DiscordListener {
     console.log(
       `[Discord] Config reloaded: ${this.channelMap.size} channel(s), ${this.enabledKolIds.size} KOL(s)`,
     )
+  }
+
+  // ==================== Historical fetch ====================
+
+  /**
+   * Fetch historical messages from a Discord channel within a date range.
+   * Uses snowflake-based pagination (100 msgs/request, respects rate limits).
+   */
+  async fetchHistory(opts: FetchHistoryOptions): Promise<RawDiscordMessage[]> {
+    if (this.status !== 'connected') throw new Error('Discord not connected')
+
+    const maxLimit = Math.min(opts.limit ?? 500, 2000)
+    const authorSet = opts.authorIds && opts.authorIds.length > 0
+      ? new Set(opts.authorIds) : null
+
+    const channel = await this.client.channels.fetch(opts.channelId)
+    if (!channel || !channel.isText()) throw new Error(`Channel ${opts.channelId} not found or not text`)
+
+    const textChannel = channel as TextChannel
+    const results: RawDiscordMessage[] = []
+    const beforeSnowflake = dateToSnowflake(new Date(opts.dateTo.getTime() + 86400_000))
+    const afterTs = opts.dateFrom.getTime()
+
+    let cursor: string | undefined = beforeSnowflake
+
+    outer: while (results.length < maxLimit) {
+      const batch: Collection<string, Message> = await textChannel.messages.fetch({ limit: 100, before: cursor })
+      if (batch.size === 0) break
+
+      const sorted: Message[] = [...batch.values()].sort((a, b) => b.createdTimestamp - a.createdTimestamp)
+
+      for (const msg of sorted) {
+        if (msg.createdTimestamp < afterTs) break outer   // passed the start date
+
+        if (authorSet && !authorSet.has(msg.author.id)) {
+          cursor = msg.id
+          continue
+        }
+
+        if (!msg.content && msg.embeds.length === 0 && msg.attachments.size === 0) {
+          cursor = msg.id
+          continue
+        }
+
+        results.push({
+          messageId: msg.id,
+          channelId: msg.channel.id,
+          guildId: (msg.guild?.id) ?? '',
+          authorId: msg.author.id,
+          authorUsername: msg.author.tag ?? msg.author.username,
+          content: msg.content ?? '',
+          embeds: msg.embeds.map((e: MessageEmbed) => ({
+            title: e.title ?? undefined,
+            description: e.description ?? undefined,
+            fields: (e.fields ?? []).map((f: { name: string; value: string }) => ({ name: f.name, value: f.value })),
+            image: e.image?.url ?? undefined,
+            thumbnail: e.thumbnail?.url ?? undefined,
+          })),
+          attachments: [...msg.attachments.values()].map((a: MessageAttachment) => ({
+            url: a.url,
+            name: a.name ?? 'file',
+            contentType: a.contentType ?? undefined,
+            width: a.width ?? undefined,
+            height: a.height ?? undefined,
+          })),
+          receivedAt: new Date(msg.createdTimestamp).toISOString(),
+        })
+
+        if (results.length >= maxLimit) break outer
+        cursor = msg.id
+      }
+
+      // Longer delay to mimic human browsing and reduce detection risk
+      await new Promise((r) => setTimeout(r, 1500))
+    }
+
+    // Return in chronological order
+    return results.reverse()
   }
 
   // ==================== Message handler ====================

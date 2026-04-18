@@ -4,15 +4,7 @@
  * these helpers are applied only at the point where text is handed to the LLM.
  */
 
-/**
- * Remove all Discord inline-mention tokens from a string.
- *
- * Stripped patterns:
- *   <@ID>   <@!ID>   — user mentions
- *   <@&ID>           — role mentions
- *   <#ID>            — channel mentions
- *   <:name:ID>  <a:name:ID>  — custom emoji
- */
+/** Strip Discord mention tokens: <@ID> <@!ID> <@&ID> <#ID> <:emoji:ID> <a:emoji:ID> */
 export function stripDiscordMentions(text: string): string {
   return text
     .replace(/<@[!&]?\d+>/g, '')   // user / role mentions
