@@ -104,4 +104,35 @@ export const discordApi = {
       .then((r) => r.json() as Promise<DiscordStatus>)
       .catch(() => ({ status: "unreachable" }) as DiscordStatus),
   reload: () => api<{ ok: boolean }>("/discord/reload", { method: "POST" }),
+  export: (params: {
+    channelId: string;
+    authorIds: string[];
+    dateFrom: string;
+    dateTo: string;
+    limit?: number;
+  }) =>
+    api<ExportResult>("/discord/export", {
+      method: "POST",
+      body: JSON.stringify(params),
+    }),
 };
+
+export interface ExportRecord {
+  messageId: string;
+  authorId: string;
+  authorUsername: string;
+  timestamp: string;
+  text: string;
+  images: string[];
+  rawContent: string;
+  hasEmbeds: boolean;
+}
+
+export interface ExportResult {
+  ok: boolean;
+  channelId: string;
+  dateFrom: string;
+  dateTo: string;
+  total: number;
+  messages: ExportRecord[];
+}
