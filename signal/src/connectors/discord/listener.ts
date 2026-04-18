@@ -147,6 +147,8 @@ export class DiscordListener {
         title: e.title ?? undefined,
         description: e.description ?? undefined,
         fields: (e.fields ?? []).map((f) => ({ name: f.name, value: f.value })),
+        image: e.image?.url ?? undefined,
+        thumbnail: e.thumbnail?.url ?? undefined,
       })),
       attachments: [...message.attachments.values()].map((a) => ({
         url: a.url,
