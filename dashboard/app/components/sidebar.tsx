@@ -50,6 +50,15 @@ const DEFAULT_NAV: NavItem[] = [
     ),
   },
   {
+    href: "/trading",
+    label: "交易配置",
+    icon: (
+      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 5.25h16.5M3.75 12h16.5m-16.5 6.75h16.5M8.25 5.25v13.5m7.5-13.5v13.5" />
+      </svg>
+    ),
+  },
+  {
     href: "/export",
     label: "数据导出",
     icon: (

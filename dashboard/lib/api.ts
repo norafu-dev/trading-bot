@@ -2,6 +2,9 @@ import type {
   KolConfig,
   ChannelConfig,
   RawDiscordMessage,
+  TradingAccountConfig,
+  BrokerTypeInfo,
+  BrokerConfigField,
 } from "../../shared/types";
 
 // ==================== Generic fetch wrapper ====================
@@ -117,6 +120,41 @@ export const discordApi = {
     api<ExportResult>("/discord/export", {
       method: "POST",
       body: JSON.stringify(params),
+    }),
+};
+
+// ==================== Trading Config API ====================
+
+export interface TestConnectionResult {
+  success: boolean;
+  error?: string;
+  account?: unknown;
+}
+
+export const tradingConfigApi = {
+  getBrokerTypes: () =>
+    api<{ brokerTypes: BrokerTypeInfo[] }>("/trading/config/broker-types"),
+  getCcxtExchanges: () =>
+    api<{ exchanges: string[] }>("/trading/config/ccxt/exchanges"),
+  getCcxtCredentialFields: (exchange: string) =>
+    api<{ fields: BrokerConfigField[] }>(
+      `/trading/config/ccxt/exchanges/${encodeURIComponent(exchange)}/credentials`,
+    ),
+  listAccounts: () =>
+    api<{ accounts: TradingAccountConfig[] }>("/trading/config"),
+  upsertAccount: (account: TradingAccountConfig) =>
+    api<TradingAccountConfig>(`/trading/config/accounts/${account.id}`, {
+      method: "PUT",
+      body: JSON.stringify(account),
+    }),
+  deleteAccount: (id: string) =>
+    api<{ success: boolean }>(`/trading/config/accounts/${id}`, {
+      method: "DELETE",
+    }),
+  testConnection: (account: TradingAccountConfig) =>
+    api<TestConnectionResult>("/trading/config/test-connection", {
+      method: "POST",
+      body: JSON.stringify(account),
     }),
 };
 
