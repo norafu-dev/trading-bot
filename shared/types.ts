@@ -76,3 +76,39 @@ export interface ChannelConfig {
   notes?: string
   addedAt: string
 }
+
+export interface GuardEntry {
+  type: string
+  options: Record<string, unknown>
+}
+
+export interface TradingAccountConfig {
+  id: string
+  label?: string
+  type: string
+  enabled: boolean
+  guards: GuardEntry[]
+  brokerConfig: Record<string, unknown>
+}
+
+export interface BrokerConfigField {
+  name: string
+  type: 'text' | 'password' | 'number' | 'boolean' | 'select'
+  label: string
+  placeholder?: string
+  default?: unknown
+  required?: boolean
+  options?: Array<{ value: string; label: string }>
+  description?: string
+  sensitive?: boolean
+}
+
+export interface BrokerTypeInfo {
+  type: string
+  name: string
+  description: string
+  badge: string
+  badgeColor: string
+  fields: BrokerConfigField[]
+  guardCategory: 'crypto' | 'securities'
+}

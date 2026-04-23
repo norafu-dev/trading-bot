@@ -1,0 +1,15 @@
+[
+  {
+    "id": "Bitget-Nora",
+    "type": "ccxt",
+    "enabled": true,
+    "guards": [],
+    "brokerConfig": {
+      "exchange": "bitget",
+      "apiKey": "bg_ea08aeb294f6a867e0496d24d255650e",
+      "secret": "08f381f7e28a0532700c9332804da513e99ef64db7c142c715418d6fcfcc4a2a",
+      "password": "ceshizhanghu0413",
+      "demoTrading": false
+    }
+  }
+]

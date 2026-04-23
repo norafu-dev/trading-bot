@@ -38,5 +38,15 @@
     "defaultConviction": 0.5,
     "addedAt": "2026-04-18T05:26:46.209Z",
     "avatarPath": "avatars/1382776450901479484.png"
+  },
+  {
+    "id": "1373381976144478329",
+    "label": "Trader Gauls",
+    "enabled": true,
+    "riskMultiplier": 1,
+    "maxOpenPositions": 3,
+    "defaultConviction": 0.5,
+    "addedAt": "2026-04-22T09:25:11.115Z",
+    "avatarPath": "avatars/1373381976144478329.png"
   }
 ]

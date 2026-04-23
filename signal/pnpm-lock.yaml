@@ -14,6 +14,9 @@ importers:
       '@hono/zod-validator':
         specifier: ^0.7.6
         version: 0.7.6(hono@4.12.14)(zod@3.25.76)
+      ccxt:
+        specifier: ^4.5.50
+        version: 4.5.50
       debug:
         specifier: ^4.4.0
         version: 4.4.3
@@ -278,6 +281,10 @@ packages:
   camelcase@5.3.1:
     resolution: {integrity: sha512-L28STB170nwWS63UjtlEOE3dldQApaJXZkOI1uMFfzf3rRuPegHaHesyee+YxQ+W6SvRDQV6UrdOdRiR153wJg==}
     engines: {node: '>=6'}
+
+  ccxt@4.5.50:
+    resolution: {integrity: sha512-7xI1QeVtW+jgikRrzGJd4qhc7X0heWrH2Z+gWOJuj9N5fqn0ub7p0ZeUj3KWOPF/MO/hRFdNZX91xuEt4Alxjg==}
+    engines: {node: '>=15.0.0'}
 
   chalk@4.1.2:
     resolution: {integrity: sha512-oKnbhFyRIXpUuez8iBMmyEa4nbj4IOQyuhc/wy9kY7/WVPcwIO9VA668Pu8RkO7+0G76SLROeyw9CpQ061i4mA==}
@@ -713,6 +720,13 @@ snapshots:
       ieee754: 1.2.1
 
   camelcase@5.3.1: {}
+
+  ccxt@4.5.50:
+    dependencies:
+      ws: 8.20.0
+    transitivePeerDependencies:
+      - bufferutil
+      - utf-8-validate
 
   chalk@4.1.2:
     dependencies:
