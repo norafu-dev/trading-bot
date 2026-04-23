@@ -112,3 +112,32 @@ export interface BrokerTypeInfo {
   fields: BrokerConfigField[]
   guardCategory: 'crypto' | 'securities'
 }
+
+/** Serializable account balance snapshot fetched from the exchange. All numeric values are Decimal strings. */
+export interface AccountBalance {
+  accountId: string
+  baseCurrency: string
+  /** Net liquidation value (free cash + mark-to-market position value) */
+  netLiquidation: string
+  /** Available free cash */
+  totalCashValue: string
+  unrealizedPnl: string
+  realizedPnl: string
+  /** Initial margin required (used margin) */
+  initMarginReq: string
+  fetchedAt: string
+}
+
+/** Serializable open position fetched from the exchange. All numeric values are Decimal strings. */
+export interface TradePosition {
+  symbol: string
+  side: 'long' | 'short'
+  /** Underlying quantity (contracts × contractSize) */
+  quantity: string
+  entryPrice: string
+  markPrice: string
+  marketValue: string
+  unrealizedPnl: string
+  realizedPnl: string
+  currency: string
+}

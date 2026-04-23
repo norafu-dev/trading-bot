@@ -5,9 +5,11 @@ import type {
   TradingAccountConfig,
   BrokerConfigField,
   BrokerTypeInfo,
+  AccountBalance,
+  TradePosition,
 } from "@shared/types";
 import { Modal } from "../components/modal";
-import { tradingConfigApi } from "@/lib/api";
+import { tradingConfigApi, tradingApi } from "@/lib/api";
 
 const inputClass =
   "w-full rounded-lg border border-border bg-muted px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/50";
@@ -25,6 +27,13 @@ export default function TradingPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [editState, setEditState] = useState<EditState>(null);
+
+  // View balance/positions state
+  const [viewingId, setViewingId] = useState<string | null>(null);
+  const [viewLoading, setViewLoading] = useState(false);
+  const [viewBalance, setViewBalance] = useState<AccountBalance | null>(null);
+  const [viewPositions, setViewPositions] = useState<TradePosition[]>([]);
+  const [viewError, setViewError] = useState<string | null>(null);
 
   async function refresh() {
     try {
@@ -51,6 +60,26 @@ export default function TradingPage() {
     if (!confirm(`确定删除账户 "${id}" 吗？`)) return;
     await tradingConfigApi.deleteAccount(id);
     await refresh();
+  }
+
+  async function handleView(id: string) {
+    setViewingId(id);
+    setViewLoading(true);
+    setViewBalance(null);
+    setViewPositions([]);
+    setViewError(null);
+    try {
+      const [bal, pos] = await Promise.all([
+        tradingApi.getBalance(id),
+        tradingApi.getPositions(id),
+      ]);
+      setViewBalance(bal);
+      setViewPositions(pos.positions);
+    } catch (e) {
+      setViewError((e as Error).message);
+    } finally {
+      setViewLoading(false);
+    }
   }
 
   return (
@@ -123,6 +152,12 @@ export default function TradingPage() {
                 </td>
                 <td className="px-4 py-3 text-right">
                   <button
+                    onClick={() => void handleView(account.id)}
+                    className="mr-2 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+                  >
+                    查看
+                  </button>
+                  <button
                     onClick={() => setEditState({ kind: "edit", account })}
                     className="mr-2 rounded px-2 py-1 text-xs text-primary hover:bg-primary/10"
                   >
@@ -160,6 +195,165 @@ export default function TradingPage() {
           />
         )}
       </Modal>
+
+      <Modal
+        open={viewingId !== null}
+        onClose={() => setViewingId(null)}
+        title={`账户详情 — ${viewingId ?? ""}`}
+      >
+        <AccountDetailView
+          loading={viewLoading}
+          balance={viewBalance}
+          positions={viewPositions}
+          error={viewError}
+          onRefresh={() => viewingId && void handleView(viewingId)}
+        />
+      </Modal>
+    </div>
+  );
+}
+
+function fmt(val: string | undefined, decimals = 2): string {
+  const n = parseFloat(val ?? "0");
+  if (isNaN(n)) return val ?? "—";
+  return n.toLocaleString("en-US", {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  });
+}
+
+function PnlCell({ value }: { value: string }) {
+  const n = parseFloat(value);
+  if (isNaN(n) || n === 0)
+    return <span className="text-muted-foreground">0.00</span>;
+  return (
+    <span className={n > 0 ? "text-success" : "text-danger"}>
+      {n > 0 ? "+" : ""}
+      {fmt(value)}
+    </span>
+  );
+}
+
+function AccountDetailView(props: {
+  loading: boolean;
+  balance: AccountBalance | null;
+  positions: TradePosition[];
+  error: string | null;
+  onRefresh: () => void;
+}) {
+  const { loading, balance, positions, error, onRefresh } = props;
+
+  if (loading) {
+    return (
+      <div className="flex h-32 items-center justify-center text-sm text-muted-foreground">
+        加载中...
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="space-y-3">
+        <div className="rounded border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">
+          {error}
+        </div>
+        <div className="flex justify-end">
+          <button
+            onClick={onRefresh}
+            className="rounded-lg border border-border px-3 py-1.5 text-sm text-foreground hover:bg-muted"
+          >
+            重试
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!balance) return null;
+
+  return (
+    <div className="space-y-5">
+      {/* Balance summary */}
+      <div className="grid grid-cols-3 gap-3">
+        {[
+          { label: "净值", value: fmt(balance.netLiquidation) },
+          { label: "可用余额", value: fmt(balance.totalCashValue) },
+          { label: "已用保证金", value: fmt(balance.initMarginReq) },
+        ].map(({ label, value }) => (
+          <div
+            key={label}
+            className="rounded-lg border border-border bg-muted/30 px-3 py-2.5 text-center"
+          >
+            <div className="text-xs text-muted-foreground">{label}</div>
+            <div className="mt-1 font-mono text-sm font-semibold text-foreground">
+              {value}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Positions */}
+      <div>
+        <div className="mb-2 flex items-center justify-between">
+          <span className="text-sm font-medium text-foreground">
+            持仓 ({positions.length})
+          </span>
+          <button
+            onClick={onRefresh}
+            className="text-xs text-muted-foreground hover:text-foreground"
+          >
+            刷新
+          </button>
+        </div>
+
+        {positions.length === 0 ? (
+          <div className="rounded-lg border border-border py-6 text-center text-sm text-muted-foreground">
+            暂无持仓
+          </div>
+        ) : (
+          <div className="overflow-hidden rounded-lg border border-border">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-border bg-muted/50 text-left text-muted-foreground">
+                  <th className="px-3 py-2 font-medium">Symbol</th>
+                  <th className="px-3 py-2 font-medium">方向</th>
+                  <th className="px-3 py-2 text-right font-medium">数量</th>
+                  <th className="px-3 py-2 text-right font-medium">开仓价</th>
+                  <th className="px-3 py-2 text-right font-medium">标记价</th>
+                  <th className="px-3 py-2 text-right font-medium">未实现盈亏</th>
+                </tr>
+              </thead>
+              <tbody>
+                {positions.map((pos, i) => (
+                  <tr
+                    key={i}
+                    className="border-b border-border last:border-0 hover:bg-muted/30"
+                  >
+                    <td className="px-3 py-2 font-mono font-medium">{pos.symbol}</td>
+                    <td className="px-3 py-2">
+                      <span
+                        className={
+                          pos.side === "long"
+                            ? "text-success font-medium"
+                            : "text-danger font-medium"
+                        }
+                      >
+                        {pos.side === "long" ? "多" : "空"}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono">{fmt(pos.quantity, 4)}</td>
+                    <td className="px-3 py-2 text-right font-mono">{fmt(pos.entryPrice, 4)}</td>
+                    <td className="px-3 py-2 text-right font-mono">{fmt(pos.markPrice, 4)}</td>
+                    <td className="px-3 py-2 text-right font-mono">
+                      <PnlCell value={pos.unrealizedPnl} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

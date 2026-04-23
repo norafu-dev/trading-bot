@@ -5,6 +5,8 @@ import type {
   TradingAccountConfig,
   BrokerTypeInfo,
   BrokerConfigField,
+  AccountBalance,
+  TradePosition,
 } from "../../shared/types";
 
 // ==================== Generic fetch wrapper ====================
@@ -156,6 +158,42 @@ export const tradingConfigApi = {
       method: "POST",
       body: JSON.stringify(account),
     }),
+};
+
+// ==================== Trading (balance / positions) API ====================
+
+export interface AccountEquitySummary {
+  id: string;
+  label: string;
+  exchange: string;
+  equity: number;
+  cash: number;
+  usedMargin: number;
+  unrealizedPnl: number;
+  error: string | null;
+}
+
+export interface EquityResult {
+  totalEquity: number;
+  totalCash: number;
+  totalUnrealizedPnl: number;
+  accounts: AccountEquitySummary[];
+}
+
+export const tradingApi = {
+  listAccounts: () =>
+    api<{
+      accounts: Array<{
+        id: string;
+        label: string;
+        type: string;
+        exchange: string | null;
+      }>;
+    }>("/trading/accounts"),
+  getEquity: () => api<EquityResult>("/trading/equity"),
+  getBalance: (id: string) => api<AccountBalance>(`/trading/accounts/${id}/balance`),
+  getPositions: (id: string) =>
+    api<{ positions: TradePosition[] }>(`/trading/accounts/${id}/positions`),
 };
 
 export interface ExportRecord {
