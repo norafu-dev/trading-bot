@@ -213,9 +213,19 @@ export function createTradingConfigRoutes() {
       } | null = null
       try {
         const body = await c.req.json()
+        const mutable = { ...(body as Record<string, unknown>) }
+        const maybeId = typeof mutable.id === 'string' ? mutable.id : undefined
+        if (maybeId) {
+          const accounts = await readTradingAccountsConfig()
+          const existing = accounts.find((a) => a.id === maybeId)
+          if (existing) {
+            unmaskSecrets(mutable, existing as unknown as Record<string, unknown>)
+          }
+        }
+
         const parsed = testConnectionSchema.parse({
-          ...(body as Record<string, unknown>),
-          id: (body as { id?: string }).id ?? '__test__',
+          ...mutable,
+          id: maybeId ?? '__test__',
         })
 
         const brokerConfig = parsed.brokerConfig
@@ -237,6 +247,16 @@ export function createTradingConfigRoutes() {
         }
         if (brokerConfig.options && typeof brokerConfig.options === 'object') {
           credentials.options = brokerConfig.options
+        }
+        if (exchangeName === 'bitget') {
+          const options =
+            credentials.options && typeof credentials.options === 'object'
+              ? { ...(credentials.options as Record<string, unknown>) }
+              : {}
+          if (options.defaultType === undefined) {
+            options.defaultType = 'swap'
+          }
+          credentials.options = options
         }
 
         const instance = new ExchangeClass(credentials)
