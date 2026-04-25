@@ -33,4 +33,7 @@ Thumbs.db
 .idea/
 
 # 账户配置
-data/config/
+data/
+
+# 交易风格
+samples/
