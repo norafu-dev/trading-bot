@@ -1,3 +1,14 @@
+// ── Parser type ───────────────────────────────────────────────────────────────
+
+/**
+ * Which parsing strategy the signal pipeline uses for a given KOL's messages.
+ * Defined here so the dashboard can display and edit it without depending on
+ * the signal-domain package.
+ */
+export type ParserType = 'regex_structured' | 'llm_text' | 'llm_vision' | 'hybrid'
+
+// ── KOL config ────────────────────────────────────────────────────────────────
+
 /** KOL (Key Opinion Leader) registration entry. */
 export interface KolConfig {
   id: string
@@ -10,6 +21,48 @@ export interface KolConfig {
   defaultConviction: number
   notes?: string
   addedAt: string
+
+  // ── Signal-pipeline fields (added by Phase 3; optional for back-compat) ───
+
+  /**
+   * Which parser strategy to use. Default: 'llm_text'.
+   * Set to 'regex_structured' for bot KOLs with fixed-format messages.
+   */
+  parsingStrategy?: ParserType
+
+  /**
+   * Simplified parsing hints stored in the config file.
+   * The signal domain enriches this with in-memory FewShotExample objects
+   * at load time; those objects are not serialised here.
+   */
+  parsingHints?: {
+    style?: string
+    vocabulary?: Record<string, string>
+    imagePolicy?: 'required' | 'optional' | 'ignore'
+    fieldDefaults?: {
+      contractType?: 'perpetual' | 'spot'
+      leverage?: number
+      side?: 'long' | 'short'
+    }
+  }
+
+  /** Name of the RegexConfig to use. Required when parsingStrategy === 'regex_structured'. */
+  regexConfigName?: string
+
+  /** Per-KOL LLM confidence threshold override [0, 1]. */
+  confidenceOverride?: number
+
+  /** Default quote currency appended downstream, e.g. "USDT". */
+  defaultSymbolQuote?: string
+
+  /** Whether this KOL primarily trades perpetuals or spot. Default: 'perpetual'. */
+  defaultContractType?: 'perpetual' | 'spot'
+
+  /** Aggregator window overrides for this KOL. */
+  aggregatorOverrides?: {
+    idleTimeoutMs?: number
+    maxDurationMs?: number
+  }
 }
 
 export interface RawEmbed {
@@ -140,4 +193,188 @@ export interface TradePosition {
   unrealizedPnl: string
   realizedPnl: string
   currency: string
+}
+
+// ── Signal ────────────────────────────────────────────────────────────────────
+
+/**
+ * A fully-assembled trading signal, produced by the signal pipeline and
+ * forwarded to the risk / approval / execution layers.
+ *
+ * Invariants:
+ * - `symbol` is always the raw KOL spelling — never CCXT-normalised.
+ * - All price / quantity / percentage values are Decimal strings.
+ * - `confidence` is the LLM's self-assessed extraction quality [0, 1].
+ *   RegexParser always sets 1.0 (deterministic match).
+ */
+export interface Signal {
+  /** ULID — globally unique, monotonically sortable. */
+  id: string
+
+  source: 'discord'
+  channelId: string
+  /** Discord snowflake ID of the first message in the originating bundle. */
+  messageId: string
+  /** ID of the `MessageBundle` that produced this signal. */
+  bundleId: string
+  kolId: string
+  /** Full concatenated text of all messages in the bundle. */
+  rawText: string
+  /** ISO 8601 — when the pipeline assembled this Signal. */
+  parsedAt: string
+  parserType: ParserType
+
+  /** Trade intent: open a new position, close an existing one, or modify parameters. */
+  action: 'open' | 'close' | 'modify'
+
+  /** 'long' = bullish; 'short' = bearish. Omit for spot-only signals. */
+  side?: 'long' | 'short'
+
+  /**
+   * Raw symbol exactly as the KOL wrote it.
+   * Examples: "BTC", "HYPE", "GENIUS", "ASTEROIOD", "HUSDT".
+   * CCXT normalisation ("BTC/USDT:USDT") is the broker layer's responsibility.
+   */
+  symbol: string
+
+  /** 'spot' for non-margin spot; 'perpetual' for futures/perps. */
+  contractType?: 'perpetual' | 'spot'
+
+  entry?: {
+    type: 'market' | 'limit'
+    /** Single entry price. Decimal string. Absent for market orders. */
+    price?: string
+    /** Lower bound of an entry price range (e.g. "76640"). Decimal string. */
+    priceRangeLow?: string
+    /** Upper bound of an entry price range (e.g. "76840"). Decimal string. */
+    priceRangeHigh?: string
+  }
+
+  stopLoss?: {
+    /** Fixed stop-loss price. Decimal string. */
+    price?: string
+    /** Conditional stop description, e.g. "1H close under 0.0256". */
+    condition?: string
+  }
+
+  /** Take-profit levels ordered by level number (TP1 = level 1). All prices are Decimal strings. */
+  takeProfits?: Array<{
+    level: number
+    price: string
+  }>
+
+  size?: {
+    /** 'percent' = % of account equity; 'absolute' = notional in quote currency. */
+    type: 'percent' | 'absolute'
+    value: string
+  }
+
+  /** Leverage multiplier. 1 = no leverage. */
+  leverage?: number
+
+  /** KOL's conviction in this setup [0, 1]. From KOL config or signal content. */
+  conviction?: number
+
+  /** LLM's confidence in this extraction [0, 1]. RegexParser always 1.0. */
+  confidence: number
+
+  /** Which input modalities the extractor used. */
+  extractedFrom?: 'text_only' | 'image_only' | 'text_and_image'
+
+  /**
+   * Raised when the extractor detects a suspicious price unit mismatch.
+   * When `detected: true`, guards force this signal into manual approval.
+   */
+  unitAnomaly?: {
+    detected: boolean
+    /** LLM's observation, e.g. "entry 7101 与 TP 0.008138 单位差约 1e6". */
+    description: string
+  }
+
+  notes?: string
+  /** LLM chain-of-thought. Stored for prompt-engineering audits only. */
+  reasoning?: string
+}
+
+// ── PositionUpdate ────────────────────────────────────────────────────────────
+
+/**
+ * A structured update to an existing open position, produced by the signal
+ * pipeline when the parser returns `kind: 'update'`.
+ *
+ * `linkedSignalId` is filled by the `UpdateLinker` after the update is parsed.
+ * When the linker cannot find a match, the update is discarded with reason
+ * 'update_no_link' — it never triggers a trade action.
+ *
+ * All price / percentage values are Decimal strings.
+ */
+export interface PositionUpdate {
+  /** ULID. */
+  id: string
+
+  /** Discord snowflake ID of the update message itself. */
+  externalMessageId?: string
+
+  /**
+   * Discord messageId extracted from the hyperlink inside bot-format update
+   * messages (e.g. `[**BTC**](https://discord.com/channels/…/{msgId})`).
+   * Used by the `by_external_id` LinkStrategy.
+   */
+  linkedExternalMessageId?: string
+
+  /**
+   * Filled by the `UpdateLinker` after linking.
+   * Undefined when the linker has not yet processed this update, or when
+   * linking failed (in which case the update is discarded).
+   */
+  linkedSignalId?: string
+
+  kolId: string
+  /** ISO 8601. */
+  receivedAt: string
+  source: 'discord'
+  channelId: string
+  /** ID of the `MessageBundle` that produced this update. */
+  bundleId: string
+  parserType: ParserType
+
+  updateType:
+    | 'limit_filled'    // A limit order was filled / activated
+    | 'tp_hit'          // A take-profit level was triggered
+    | 'sl_hit'          // Stop loss triggered (closed at a loss)
+    | 'breakeven_move'  // Stop moved to entry price
+    | 'breakeven_hit'   // The breakeven stop was subsequently hit
+    | 'manual_close'    // KOL manually closing (e.g. "Taking TP here at …")
+    | 'full_close'      // Entire position closed, explicit announcement
+    | 'runner_close'    // Trailing runner portion closed
+    | 're_entry_hint'   // Informal re-entry suggestion; no trade action
+    | 'stop_modified'   // Stop price changed to a non-breakeven value
+    | 'other'           // Unclassifiable; pipeline discards this update
+
+  /** TP level that was hit. Only meaningful when updateType === 'tp_hit'. */
+  level?: number
+
+  /** Percentage of the position closed in this update. Decimal string, e.g. "50". */
+  closedPercent?: string
+
+  /** Percentage of the position still open. Decimal string. */
+  remainingPercent?: string
+
+  /** New stop-loss price after a stop_modified or breakeven_move update. Decimal string. */
+  newStopLoss?: string
+
+  /** Price at which the KOL reports closing (manual/TP closes). Decimal string. */
+  realizedPriceRef?: string
+
+  /** Realised R/R ratio. Signed Decimal string: "1.89" or "-1.00". */
+  realizedRR?: string
+
+  /** LLM's confidence [0, 1]. RegexParser always 1.0. */
+  confidence: number
+
+  /** Which input modalities were used. */
+  extractedFrom?: 'text_only' | 'image_only' | 'text_and_image'
+
+  /** LLM chain-of-thought. Stored for prompt-engineering audits only. */
+  reasoning?: string
 }

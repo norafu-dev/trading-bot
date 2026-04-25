@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import type { MessageStore } from '../domain/signals/message-store.js'
-import type { RawDiscordMessage, RawAttachment, RawEmbed } from '../../../../shared/types.js'
+import type { RawDiscordMessage, RawAttachment, RawEmbed } from '../../../shared/types.js'
 
 // ── Discord CDN URL refresh ──────────────────────────────────────────────────
 
