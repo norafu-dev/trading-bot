@@ -70,8 +70,10 @@ export interface IMessageFilter {
  */
 export interface IMessagePrePipeline {
   /**
-   * Run `message` through all filters.
+   * Run `message` through all filters with the given context.
    * Returns the first failing result, or `{ pass: true }` if all pass.
+   * Context is passed per-call because kolRegistry and recentMessageIds
+   * change over the process lifetime.
    */
-  process(message: RawMessage): Promise<FilterResult>
+  process(message: RawMessage, ctx: FilterContext): Promise<FilterResult>
 }

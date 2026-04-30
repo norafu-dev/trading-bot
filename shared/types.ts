@@ -215,6 +215,17 @@ export interface Signal {
   channelId: string
   /** Discord snowflake ID of the first message in the originating bundle. */
   messageId: string
+
+  /**
+   * For bot KOLs that forward messages from another channel: the Discord
+   * message ID embedded in the signal URL, pointing back to the original
+   * source message. Subsequent position updates reference this ID via
+   * `PositionUpdate.linkedExternalMessageId`, not `Signal.messageId`.
+   *
+   * Absent for human KOLs (whose `messageId` is already the canonical reference).
+   */
+  linkedExternalMessageId?: string
+
   /** ID of the `MessageBundle` that produced this signal. */
   bundleId: string
   kolId: string
@@ -338,6 +349,14 @@ export interface PositionUpdate {
   bundleId: string
   parserType: ParserType
 
+  /**
+   * Semantic classification of what happened to the position.
+   *
+   * Only real, actionable update types appear here. Extractor-internal
+   * sentinel values ('re_entry_hint', 'other') are intercepted by the parser
+   * implementation and converted to a DiscardReason before the PositionUpdate
+   * is assembled — they never reach this type.
+   */
   updateType:
     | 'limit_filled'    // A limit order was filled / activated
     | 'tp_hit'          // A take-profit level was triggered
@@ -347,9 +366,7 @@ export interface PositionUpdate {
     | 'manual_close'    // KOL manually closing (e.g. "Taking TP here at …")
     | 'full_close'      // Entire position closed, explicit announcement
     | 'runner_close'    // Trailing runner portion closed
-    | 're_entry_hint'   // Informal re-entry suggestion; no trade action
     | 'stop_modified'   // Stop price changed to a non-breakeven value
-    | 'other'           // Unclassifiable; pipeline discards this update
 
   /** TP level that was hit. Only meaningful when updateType === 'tp_hit'. */
   level?: number

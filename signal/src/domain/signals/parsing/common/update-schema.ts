@@ -1,12 +1,17 @@
 import { z } from 'zod'
 
 /**
- * The closed set of update types that an extractor can classify a position
- * update into.
+ * The closed set of values the extractor can emit for `updateType`.
  *
- * 'other' is the catch-all: if the LLM cannot map the update to any specific
- * type, the pipeline treats the result as `discarded` rather than forwarding
- * an under-specified update downstream.
+ * Most values map 1:1 to `PositionUpdate.updateType` in shared/types.ts.
+ * Two values are extractor-internal sentinels — the parser implementation
+ * intercepts them and converts to a DiscardReason before assembling a
+ * PositionUpdate:
+ *
+ *   're_entry_hint' → DiscardReason 're_entry_hint'
+ *   'other'         → DiscardReason 'update_unclassifiable'
+ *
+ * Neither sentinel ever reaches the output PositionUpdate.updateType.
  */
 export const updateTypeSchema = z.enum([
   'limit_filled',    // A limit order was filled/activated
@@ -17,9 +22,10 @@ export const updateTypeSchema = z.enum([
   'manual_close',    // KOL is closing the position manually (e.g. "Taking TP here")
   'full_close',      // Entire position closed (profit or loss), explicit announcement
   'runner_close',    // Only the trailing runner portion was closed
-  're_entry_hint',   // Informal suggestion to re-enter; no executable fields
   'stop_modified',   // Stop price changed to a non-breakeven value
-  'other',           // Could not classify; pipeline will discard
+  // ── extractor-internal sentinels (intercepted by parser; never in PositionUpdate) ──
+  're_entry_hint',   // Informal re-entry suggestion; no executable fields → discard
+  'other',           // Could not classify → discard
 ])
 
 export type UpdateType = z.infer<typeof updateTypeSchema>

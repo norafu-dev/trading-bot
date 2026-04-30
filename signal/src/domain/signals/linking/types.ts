@@ -63,10 +63,20 @@ export interface ISignalIndex {
    * Look up a signal by the Discord messageId of the message that
    * originated the signal (stored in `Signal.messageId`).
    *
-   * Used by the `by_external_id` strategy.
+   * Used by the `by_external_id` strategy as the fallback lookup path.
    * Returns null when no signal with that externalId is currently open.
    */
   findByExternalId(messageId: string): Signal | null
+
+  /**
+   * Look up a signal by `Signal.linkedExternalMessageId` — the Discord
+   * message ID embedded in bot-format signal URLs. This is the primary lookup
+   * path for bot KOLs (DEC-016): updates reference the original source message
+   * ID, not the forwarded message that `Signal.messageId` records.
+   *
+   * Returns null when no open signal has that linkedExternalMessageId.
+   */
+  findByLinkedExternalId(messageId: string): Signal | null
 
   /**
    * Find all currently open signals from a specific KOL for a specific symbol.
@@ -79,7 +89,7 @@ export interface ISignalIndex {
   findOpenByKolAndSymbol(
     kolId: string,
     symbol: string,
-    /** Only consider signals parsed before this timestamp. */
+    /** Only consider signals parsed at or before this timestamp. */
     before: Date,
   ): Signal[]
 
@@ -92,8 +102,9 @@ export interface ISignalIndex {
   /**
    * Remove a signal from the open set.
    * Called when a position is fully closed (all units exited).
-   * Closed signals are no longer findable by `findByExternalId` or
-   * `findOpenByKolAndSymbol` — preventing stale linkage after re-entry.
+   * Closed signals are no longer findable by `findByExternalId`,
+   * `findByLinkedExternalId`, or `findOpenByKolAndSymbol` — preventing
+   * stale linkage after re-entry.
    */
   markClosed(signalId: string): void
 }

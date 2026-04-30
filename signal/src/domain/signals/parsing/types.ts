@@ -205,11 +205,12 @@ export interface IExtractor {
  * Each variant is a first-class event in the system — not a silent drop.
  */
 export type DiscardReason =
-  | 'not_a_signal'      // Classifier judged this non-actionable (chitchat, education, etc.)
-  | 'low_confidence'    // LLM confidence below the configured threshold
-  | 're_entry_hint'     // Informal re-entry suggestion; informational only, no trade action
-  | 'duplicate_signal'  // Content hash matches a recently parsed signal
-  | 'update_no_link'    // Is a valid update but UpdateLinker could not associate it with a signal
+  | 'not_a_signal'          // Classifier judged this non-actionable (chitchat, education, etc.)
+  | 'low_confidence'        // LLM confidence below the configured threshold
+  | 're_entry_hint'         // Extractor returned updateType 're_entry_hint'; informational only
+  | 'update_unclassifiable' // Extractor returned updateType 'other'; could not classify update
+  | 'duplicate_signal'      // Content hash matches a recently parsed signal
+  | 'update_no_link'        // Is a valid update but UpdateLinker could not associate it with a signal
 
 /**
  * Structured error produced when the parser attempted to extract but failed.
