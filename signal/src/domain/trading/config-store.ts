@@ -1,10 +1,10 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { z } from 'zod'
-import { DATA_DIR } from '../../paths.js'
+import { PATHS } from '../../core/paths.js'
 import type { TradingAccountConfig } from '../../../../shared/types.js'
 
-const CONFIG_DIR = resolve(DATA_DIR, 'config')
+const CONFIG_DIR = resolve(PATHS.dataRoot, 'config')
 const ACCOUNTS_FILE = resolve(CONFIG_DIR, 'accounts.json')
 
 const guardSchema = z.object({

@@ -1,7 +1,7 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { z } from 'zod'
-import { DATA_DIR } from '../../paths.js'
+import { PATHS } from '../../core/paths.js'
 import type { KolConfig, ChannelConfig } from '../../../../shared/types.js'
 
 // ==================== Schemas ====================
@@ -38,7 +38,7 @@ export const updateChannelSchema = channelConfigSchema.partial().omit({ id: true
 
 // ==================== File paths ====================
 
-const KOLS_DIR = resolve(DATA_DIR, 'kols')
+const KOLS_DIR = resolve(PATHS.dataRoot, 'kols')
 const KOLS_FILE = resolve(KOLS_DIR, 'kols.json')
 const CHANNELS_FILE = resolve(KOLS_DIR, 'channels.json')
 

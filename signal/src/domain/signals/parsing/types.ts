@@ -132,6 +132,38 @@ export interface ILlmProvider {
   extract(input: ExtractInput): Promise<ExtractOutput>
 }
 
+// ── ParseContext ─────────────────────────────────────────────────────────────
+
+/**
+ * Minimal context required by all parsers, including pure regex parsers.
+ * Assembled by the dispatcher and passed to `IParser.parse()`.
+ *
+ * Parsers must not hold state between calls — all dependencies are
+ * injected here per-call so implementations can be stateless.
+ */
+export interface BaseParseContext {
+  bundle: MessageBundle
+  kol: KolConfig
+  now: Date
+}
+
+/**
+ * Context for LLM-based parsers (`llm_text`, `llm_vision`, `hybrid`).
+ * Extends `BaseParseContext` with required LLM infrastructure.
+ *
+ * Both fields are required (not optional) because:
+ * - `llmProvider`: without it, an LLM parser cannot make any API calls.
+ * - `sessionLogger`: every LLM call must be logged for prompt auditability;
+ *   silently skipping the log would corrupt the gold-standard training dataset.
+ *
+ * The dispatcher guarantees these are present before calling any LLM parser.
+ * Regex parsers receive `BaseParseContext` only and never see these fields.
+ */
+export interface LlmParseContext extends BaseParseContext {
+  llmProvider: ILlmProvider
+  sessionLogger: ISessionLogger
+}
+
 // ── Classifier / Extractor ───────────────────────────────────────────────────
 
 /**
@@ -139,7 +171,7 @@ export interface ILlmProvider {
  * Determines which downstream path a bundle takes without extracting fields.
  */
 export interface IClassifier {
-  classify(ctx: ParseContext): Promise<ClassifyOutput>
+  classify(ctx: LlmParseContext): Promise<ClassifyOutput>
 }
 
 /** Metadata attached to every extractor result. */
@@ -160,7 +192,7 @@ export type ExtractResult<T> =
  */
 export interface IExtractor {
   extract<T>(
-    ctx: ParseContext,
+    ctx: LlmParseContext,
     kind: 'signal' | 'update',
     schema: ZodSchema<T>,
   ): Promise<ExtractResult<T>>
@@ -235,37 +267,21 @@ export type ParseResult =
   | { kind: 'discarded'; reason: DiscardReason; meta: ParseMeta }
   | { kind: 'failed'; error: ParseError; meta: ParseMeta }
 
-// ── ParseContext ─────────────────────────────────────────────────────────────
-
-/**
- * Everything a parser needs to produce a `ParseResult`.
- * Assembled by the dispatcher and passed to `IParser.parse()`.
- *
- * Parsers must not hold state between calls — any stateful dependencies
- * (LLM provider, session logger) are injected here per-call.
- */
-export interface ParseContext {
-  bundle: MessageBundle
-  kol: KolConfig
-  now: Date
-  /** Injected for LLM-based parsers. Absent for pure regex parsers. */
-  llmProvider?: ILlmProvider
-  /** Injected for any parser that makes LLM calls. */
-  sessionLogger?: ISessionLogger
-}
-
 // ── IParser ──────────────────────────────────────────────────────────────────
 
 /**
- * The core parsing interface.
+ * The core parsing interface, generic over context type.
  *
- * Implementations: `RegexStructuredParser`, `LlmParser`, `HybridParser`.
- * All are registered in the `ParserRegistry` under their `name`.
+ * `TCtx` defaults to `BaseParseContext` so callers that do not care about
+ * the distinction can use `IParser` without a type argument.
+ *
+ * - `IParser<BaseParseContext>` — regex-only parsers (`regex_structured`)
+ * - `IParser<LlmParseContext>`  — LLM parsers (`llm_text`, `llm_vision`, `hybrid`)
  *
  * Implementations must be stateless — the same instance may be called
  * concurrently for multiple bundles.
  */
-export interface IParser {
+export interface IParser<TCtx extends BaseParseContext = BaseParseContext> {
   /**
    * Parser identifier. Must match a `parsingStrategy` value in `KolConfig`.
    * Examples: 'regex_structured', 'llm_text', 'llm_vision', 'hybrid'
@@ -280,18 +296,77 @@ export interface IParser {
    * - Never throws for business-logic failures.
    * - Always returns within a reasonable timeout (implementation must enforce this).
    */
-  parse(ctx: ParseContext): Promise<ParseResult>
+  parse(ctx: TCtx): Promise<ParseResult>
 }
 
-// ── ParserRegistry / Dispatcher ──────────────────────────────────────────────
+// ── IParserRegistry ──────────────────────────────────────────────────────────
 
 /**
- * Registry for `IParser` implementations.
- * Parsers are registered once at startup and looked up by name at dispatch time.
+ * Bucketed registry for `IParser` implementations.
+ *
+ * Two buckets, typed separately so the dispatcher always receives the correct
+ * context type without casting:
+ *
+ * - **Base bucket** (`registerBase` / `getBase` / `listBase`):
+ *   Regex-only parsers (`IParser<BaseParseContext>`). These parsers require only
+ *   `bundle`, `kol`, and `now` — no LLM infrastructure.
+ *
+ * - **LLM bucket** (`registerLlm` / `getLlm` / `listLlm`):
+ *   LLM parsers (`IParser<LlmParseContext>`). These parsers require the full
+ *   `LlmParseContext` including `llmProvider` and `sessionLogger`.
+ *   The `hybrid` parser belongs here: it needs LLM context for its fallback path.
+ *
+ * Rationale for separate buckets over a single registry with runtime guards:
+ * The dispatcher constructs context before calling `get`, so bucket membership
+ * must be known at call site. A single `get(name)` returning `IParser` would
+ * force the dispatcher to cast or guard at runtime, hiding a class of bugs where
+ * an LLM parser is accidentally called with only `BaseParseContext`.
+ *
+ * No cross-bucket enumeration is provided intentionally: the dispatcher always
+ * knows which kind of parser it is constructing context for.
  */
 export interface IParserRegistry {
-  register(parser: IParser): void
-  /** Throws if no parser is registered under `name`. */
-  get(name: string): IParser
-  list(): IParser[]
+  /** Register a regex-only parser. Throws if `name` is already registered. */
+  registerBase(parser: IParser<BaseParseContext>): void
+
+  /** Register an LLM parser. Throws if `name` is already registered. */
+  registerLlm(parser: IParser<LlmParseContext>): void
+
+  /**
+   * Look up a regex-only parser by name.
+   * Throws if no parser is registered under `name` in the base bucket.
+   */
+  getBase(name: string): IParser<BaseParseContext>
+
+  /**
+   * Look up an LLM parser by name.
+   * Throws if no parser is registered under `name` in the LLM bucket.
+   */
+  getLlm(name: string): IParser<LlmParseContext>
+
+  /** Return all registered regex-only parsers. */
+  listBase(): IParser<BaseParseContext>[]
+
+  /** Return all registered LLM parsers (including hybrid). */
+  listLlm(): IParser<LlmParseContext>[]
+
+  /**
+   * Startup health check. Called once by `main` (or the Dispatcher constructor)
+   * after all parsers are registered and before the first bundle is dispatched.
+   *
+   * Validates that every enabled KOL's `parsingStrategy` resolves to a
+   * registered parser in the correct bucket:
+   * - `regex_structured` KOLs → name must exist in the base bucket
+   * - `llm_text` / `llm_vision` / `hybrid` KOLs → name must exist in the LLM bucket
+   *
+   * This method only checks that a parser *instance* is registered under the
+   * strategy name. It does NOT validate that a `regex_structured` KOL's
+   * `regexConfigName` resolves to an existing `RegexConfig` — that is
+   * `RegexConfigRegistry`'s responsibility (Batch 4).
+   *
+   * Throws `ParserRegistryHealthCheckError` on the first failure, with the
+   * error message identifying: which KOL ID, which strategy name, which bucket
+   * was searched. Callers should treat this as a fatal startup error.
+   */
+  healthCheck(kols: ReadonlyArray<KolConfig>): void
 }

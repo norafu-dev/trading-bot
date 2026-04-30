@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { classificationLabelSchema } from '../parsing/common/labels.js'
 
 /**
  * Zod schema for validating KOL config entries read from `data/kols/kols.json`.
@@ -17,21 +18,42 @@ import { z } from 'zod'
  * Backward compatibility: the `z.preprocess` step defaults `parsingStrategy`
  * to `'llm_text'` for entries that predate this field. Such entries must also
  * have `parsingHints` present to pass validation — add a TODO stub if needed.
- *
- * Note: `parsingHints.classifierExamples` and `extractorExamples` are typed
- * as `z.unknown()[]` here. They reference `MessageBundle` objects which are
- * in-memory pipeline types, not JSON-serialisable. The `KolRegistry`
- * deserialises them into full `FewShotExample` objects at load time.
  */
+
+/**
+ * Schema for a single few-shot teaching example stored in `kols.json`.
+ *
+ * `expected.data` is intentionally `z.unknown()`: teaching counter-examples
+ * may have deliberately incomplete fields to show the LLM what NOT to extract.
+ * Strict validation of extraction output happens at runtime via
+ * `signalExtractSchema` / `positionUpdateExtractSchema`, not here.
+ */
+const fewShotExampleSchema = z.object({
+  description: z.string().optional(),
+  inputText: z.string(),
+  inputImages: z
+    .array(z.object({ url: z.string(), contentType: z.string() }))
+    .optional(),
+  expected: z.discriminatedUnion('kind', [
+    z.object({
+      kind: z.literal('classification'),
+      label: classificationLabelSchema,
+      reasoning: z.string().optional(),
+    }),
+    z.object({
+      kind: z.literal('extraction'),
+      targetKind: z.enum(['signal', 'update']),
+      data: z.unknown(),
+    }),
+  ]),
+})
 
 const parsingHintsSchema = z.object({
   style: z.string(),
   vocabulary: z.record(z.string(), z.string()).optional(),
   imagePolicy: z.enum(['required', 'optional', 'ignore']).optional(),
-  /** Stored as opaque JSON; deserialised by the registry at load time. */
-  classifierExamples: z.array(z.unknown()).optional(),
-  /** Stored as opaque JSON; deserialised by the registry at load time. */
-  extractorExamples: z.array(z.unknown()).optional(),
+  classifierExamples: z.array(fewShotExampleSchema).optional(),
+  extractorExamples: z.array(fewShotExampleSchema).optional(),
   fieldDefaults: z
     .object({
       contractType: z.enum(['perpetual', 'spot']).optional(),

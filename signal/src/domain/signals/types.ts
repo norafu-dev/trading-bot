@@ -38,6 +38,7 @@ export type { KolConfigSchema } from './kol/schema.js'
 
 // ── Parsing layer ─────────────────────────────────────────────────────────────
 export type { ClassificationLabel } from './parsing/common/labels.js'
+export { classificationLabelSchema } from './parsing/common/labels.js'
 export type { FlattenMessageContent } from './parsing/common/message-content.js'
 
 export { signalExtractSchema } from './parsing/common/signal-schema.js'
@@ -63,7 +64,8 @@ export type {
   ParseError,
   ParseMeta,
   ParseResult,
-  ParseContext,
+  BaseParseContext,
+  LlmParseContext,
   IParser,
   IParserRegistry,
 } from './parsing/types.js'

@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { mkdir, writeFile, readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import { DATA_DIR } from '../paths.js'
+import { PATHS } from '../core/paths.js'
 import {
   readKols,
   writeKols,
@@ -14,7 +14,7 @@ import {
 } from '../domain/signals/kol-store.js'
 import type { DiscordListener } from '../connectors/discord/listener.js'
 
-const AVATARS_DIR = resolve(DATA_DIR, 'avatars')
+const AVATARS_DIR = resolve(PATHS.dataRoot, 'avatars')
 
 const MIME_TO_EXT: Record<string, string> = {
   'image/jpeg': 'jpg',
@@ -113,7 +113,7 @@ export function createKolChannelRoutes(listener: DiscordListener | null) {
       if (!kol?.avatarPath) return c.json({ error: 'No avatar' }, 404)
 
       try {
-        const filepath = resolve(DATA_DIR, kol.avatarPath)
+        const filepath = resolve(PATHS.dataRoot, kol.avatarPath)
         const data = await readFile(filepath)
         const ext = kol.avatarPath.split('.').pop()?.toLowerCase() ?? 'jpg'
         const contentType = EXT_TO_MIME[ext] ?? 'image/jpeg'

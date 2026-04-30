@@ -11,7 +11,6 @@
  *   signal-domain crash scenario.
  */
 
-import type { MessageBundle } from '../ingestion/aggregator/types.js'
 import type { ClassificationLabel } from '../parsing/common/labels.js'
 import type { KolConfig as SharedKolConfig } from '../../../../../shared/types.js'
 
@@ -26,27 +25,48 @@ import type { KolConfig as SharedKolConfig } from '../../../../../shared/types.j
 export type ParserType = 'regex_structured' | 'llm_text' | 'llm_vision' | 'hybrid'
 
 /**
- * A labelled example bundle used to ground the LLM classifier or extractor.
+ * A labelled example used to ground the LLM classifier or extractor in this
+ * KOL's specific signal style.
  *
- * Examples are stored in kols.json so they can be updated from the dashboard
- * without redeploying. Hot-reload propagates new examples to the next parse
- * call automatically.
+ * Stored in kols.json and hot-reloaded; updates take effect on the next parse
+ * call without a process restart.
+ *
+ * Design note — why `inputText` / `inputImages` instead of a raw `MessageBundle`:
+ * Few-shot examples are teaching material for the LLM. They must be clean,
+ * pre-processed text, never raw metadata (messageId, authorId, timestamps).
+ * Embedding metadata would pollute the LLM's reasoning about the trade signal.
+ * The conversion from `MessageBundle` to `inputText` is the prompt-builder's
+ * job (batch 5), not the config layer's.
+ *
+ * Design note — why `expected.data` is `unknown`:
+ * Few-shot extraction examples may include intentional teaching counter-examples
+ * with incomplete fields (showing the LLM what NOT to do). Strict Zod validation
+ * at load time would block valid instructional examples. Consuming code applies
+ * `signalExtractSchema` / `positionUpdateExtractSchema` to the extracted data
+ * at runtime, not at config-load time.
  */
 export interface FewShotExample {
-  /**
-   * A real (or carefully constructed) bundle from this KOL.
-   * Prefer real historical messages over synthetic ones.
-   */
-  bundle: MessageBundle
-
-  /** The correct classification for this bundle. */
-  expectedLabel: ClassificationLabel
+  /** Human-readable annotation note. Not included in LLM prompts. */
+  description?: string
 
   /**
-   * Optional explanation of why this label is correct.
-   * Included in the LLM prompt to help it reason by analogy.
+   * Pre-flattened input text: `content` + embed title/description/fields
+   * combined into a single plain-text string.
+   * Produced by `FlattenMessageContent` (parsing/common/message-content.ts).
    */
-  reasoning?: string
+  inputText: string
+
+  /** Chart screenshot images for vision-capable parsers. */
+  inputImages?: Array<{ url: string; contentType: string }>
+
+  /**
+   * Expected output for this example.
+   * Discriminated on `kind` to prevent mixing classifier and extractor examples
+   * in the same array.
+   */
+  expected:
+    | { kind: 'classification'; label: ClassificationLabel; reasoning?: string }
+    | { kind: 'extraction'; targetKind: 'signal' | 'update'; data: unknown }
 }
 
 /**
@@ -82,13 +102,15 @@ export interface ParsingHints {
 
   /**
    * KOL-specific few-shot examples for the classifier stage.
+   * Each entry must have `expected.kind === 'classification'`.
    * Merged with the shared example pool when building the classifier prompt.
    */
   classifierExamples?: FewShotExample[]
 
   /**
    * KOL-specific few-shot examples for the extractor stage.
-   * These demonstrate the expected field values for this KOL's style.
+   * Each entry must have `expected.kind === 'extraction'`.
+   * Demonstrate the expected field values for this KOL's style.
    */
   extractorExamples?: FewShotExample[]
 
@@ -129,6 +151,13 @@ export type KolConfig = KolConfigBase & (
       /**
        * Deterministic parsing for machine-generated, fixed-format messages.
        * Requires a named RegexConfig registered in the parser's config registry.
+       *
+       * `regexConfigName` references a named `RegexConfig` instance.
+       * The `RegexConfig` type itself is defined in `parsing/regex/types.ts`
+       * (created in batch 4). The `KolRegistry` does NOT validate that this
+       * name resolves to an existing config — that check runs in the Dispatcher's
+       * startup health check (batch 4). Batches 1–3 do not need to know about
+       * `RegexConfig` existence.
        */
       parsingStrategy: 'regex_structured'
       regexConfigName: string
@@ -169,10 +198,26 @@ export interface IKolRegistry {
   /**
    * Look up a KOL by Discord authorId.
    * Returns null when the KOL is unknown or disabled.
+   *
+   * **Immutable snapshot guarantee**: the returned reference is a snapshot of
+   * the config at the moment of this call. Subsequent hot-reloads or explicit
+   * config updates do NOT mutate the returned object. Code that captures this
+   * reference (e.g., a `ParseContext` created at dispatch time) will always
+   * see the config that was current when the context was created.
+   *
+   * Config updates only affect contexts created after the reload completes.
+   * This prevents mid-parse LLM prompt changes that would corrupt the
+   * session log's record of what prompt was actually used.
    */
   get(kolId: string): KolConfig | null
 
-  /** Return all registered KOL configs (enabled and disabled). */
+  /**
+   * Return all registered KOL configs (enabled and disabled).
+   *
+   * Each element is an immutable snapshot — same guarantee as `get()`.
+   * The array itself is a new copy each call; mutating it has no effect on
+   * the registry's internal state.
+   */
   list(): KolConfig[]
 
   /**

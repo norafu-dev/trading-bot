@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx tsc *)",
+      "Bash(npx madge *)",
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(./node_modules/.bin/tsc --noEmit)"
+    ]
+  }
+}
