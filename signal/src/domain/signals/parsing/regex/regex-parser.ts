@@ -1,7 +1,7 @@
 import type { Signal, PositionUpdate } from '../../../../../../shared/types.js'
 import { newUlid } from '../../../../core/ids.js'
 import type { MessageBundle } from '../../ingestion/aggregator/types.js'
-import type { RawMessage } from '../../ingestion/types.js'
+import { flattenBundle } from '../common/flatten.js'
 import type {
   BaseParseContext,
   IParser,
@@ -19,7 +19,12 @@ export class RegexStructuredParser implements IParser<BaseParseContext> {
     const startedAt = ctx.now.toISOString()
     const meta = buildMeta(ctx.bundle, startedAt, ctx.now)
 
-    if (ctx.kol.parsingStrategy !== 'regex_structured') {
+    // Accept both 'regex_structured' (direct) and 'hybrid' (via HybridParser).
+    // Other strategies must never reach this parser — that would be a wiring bug.
+    if (
+      ctx.kol.parsingStrategy !== 'regex_structured' &&
+      ctx.kol.parsingStrategy !== 'hybrid'
+    ) {
       return {
         kind: 'failed',
         error: {
@@ -50,26 +55,6 @@ export class RegexStructuredParser implements IParser<BaseParseContext> {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-function flattenBundle(bundle: MessageBundle): string {
-  return bundle.messages
-    .map(flattenMessage)
-    .filter(Boolean)
-    .join('\n---\n')
-}
-
-function flattenMessage(msg: RawMessage): string {
-  const parts: string[] = []
-  if (msg.content.trim()) parts.push(msg.content.trim())
-  for (const embed of msg.embeds) {
-    if (embed.title) parts.push(embed.title)
-    if (embed.description) parts.push(embed.description)
-    for (const field of embed.fields) {
-      parts.push(`${field.name}: ${field.value}`)
-    }
-  }
-  return parts.join('\n')
-}
 
 function extract(extractor: FieldExtractor, text: string): string | undefined {
   const match = new RegExp(extractor.pattern, 'i').exec(text)

@@ -102,14 +102,15 @@ export const positionUpdateExtractSchema = z.object({
    */
   confidence: z.number().min(0).max(1),
 
-  /** Which input modalities contributed to this extraction. */
-  extractedFrom: z.enum(['text_only', 'image_only', 'text_and_image']).optional(),
+  // NOTE: `extractedFrom` is intentionally NOT in this schema — see
+  // signal-schema.ts for the rationale.
 
   /**
    * LLM chain-of-thought reasoning.
    * Stored for prompt-engineering audits only; never displayed to end users.
+   * Min 20 chars to keep audit logs useful for prompt iteration.
    */
-  reasoning: z.string().optional(),
+  reasoning: z.string().min(20).optional(),
 })
 
 /** TypeScript type inferred from `positionUpdateExtractSchema`. */

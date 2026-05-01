@@ -105,13 +105,11 @@ export const signalExtractSchema = z.object({
    */
   confidence: z.number().min(0).max(1),
 
-  /**
-   * Which input modalities contributed to this extraction.
-   * 'text_only' = only the text fields were used.
-   * 'image_only' = all information came from chart screenshots.
-   * 'text_and_image' = both were needed.
-   */
-  extractedFrom: z.enum(['text_only', 'image_only', 'text_and_image']).optional(),
+  // NOTE: `extractedFrom` is intentionally NOT in this schema.
+  // The provider declares which modalities it sent (via ExtractInput.extractedFrom);
+  // that value flows back through ExtractMeta and onto Signal.extractedFrom.
+  // Asking the LLM to self-report introduces a second source of truth that can
+  // disagree with what was actually sent.
 
   /**
    * Flag raised when the extractor detects suspicious price unit mismatch.
@@ -134,8 +132,9 @@ export const signalExtractSchema = z.object({
   /**
    * LLM chain-of-thought reasoning that produced this extraction.
    * Stored for prompt-engineering audits only; never displayed to end users.
+   * Min 20 chars: a one-word "ok" reasoning is useless for prompt iteration.
    */
-  reasoning: z.string().optional(),
+  reasoning: z.string().min(20).optional(),
 })
 
 /** TypeScript type inferred from `signalExtractSchema`. */

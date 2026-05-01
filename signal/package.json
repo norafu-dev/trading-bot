@@ -9,8 +9,10 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@ai-sdk/openai": "^3.0.55",
     "@hono/node-server": "^1.19.14",
     "@hono/zod-validator": "^0.7.6",
+    "ai": "^6.0.172",
     "ccxt": "^4.5.50",
     "debug": "^4.4.0",
     "discord.js-selfbot-v13": "^3.7.1",

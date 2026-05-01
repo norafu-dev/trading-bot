@@ -67,13 +67,29 @@ export interface ISessionLogger {
 // ── LLM Provider ─────────────────────────────────────────────────────────────
 
 /**
+ * Single chat message exchanged with the LLM.
+ * `content` is `string` for text-only and an array of structured parts for
+ * multimodal content (e.g. text + image_url blocks).
+ */
+export type LlmMessage = {
+  role: 'user' | 'assistant' | 'system'
+  content: string | unknown
+}
+
+/**
  * Input to the classifier stage.
- * The provider receives a pre-built prompt and returns a structured label.
+ *
+ * The caller (`Classifier`) pre-builds the full chat payload — `systemPrompt`
+ * and `messages` — so that the same array can be both sent to the provider
+ * and recorded verbatim in the session log. The provider does not rebuild
+ * messages: that would let the audit log diverge from what was actually sent.
  */
 export interface ClassifyInput {
   bundle: MessageBundle
   kol: KolConfig
   systemPrompt: string
+  /** Pre-built chat messages (few-shots + the live bundle), in send order. */
+  messages: LlmMessage[]
   fewShots: ClassifyFewShot[]
 }
 
@@ -86,7 +102,10 @@ export interface ClassifyFewShot {
 
 /**
  * Output from the classifier stage.
- * The `rawResponse` is stored in the session log for audit purposes.
+ *
+ * `model` and `tokensUsed` are reported by the provider and flow back to the
+ * `SessionLogger`. The provider must populate them — otherwise audit records
+ * cannot be used for prompt iteration or cost analysis.
  */
 export interface ClassifyOutput {
   classification: ClassificationLabel
@@ -94,17 +113,33 @@ export interface ClassifyOutput {
   confidence: number
   /** LLM's chain-of-thought reasoning. */
   reasoning: string
+  /** Model identifier used for this call (e.g. "google/gemini-2.5-flash"). */
+  model: string
+  /** Token usage reported by the provider. Zero only when truly unavailable. */
+  tokensUsed: { prompt: number; completion: number }
   rawResponse: unknown
 }
 
-/** Input to the extractor stage. */
+/**
+ * Input to the extractor stage.
+ *
+ * Like `ClassifyInput`, the caller pre-builds `systemPrompt` and `messages`
+ * so the audit log records the exact payload sent.
+ */
 export interface ExtractInput {
   bundle: MessageBundle
   kol: KolConfig
   targetKind: 'signal' | 'update'
   schema: ZodSchema
-  /** Whether to include image attachments in the request. */
-  includeImages: boolean
+  systemPrompt: string
+  /** Pre-built chat messages (text-only or multimodal), in send order. */
+  messages: LlmMessage[]
+  /**
+   * Modality the caller actually included. The provider does not infer this
+   * — it trusts what the caller declares so the value flows unchanged into
+   * `Signal.extractedFrom` / `PositionUpdate.extractedFrom`.
+   */
+  extractedFrom: 'text_only' | 'image_only' | 'text_and_image'
 }
 
 /** Output from the extractor stage before Zod validation. */
@@ -113,9 +148,12 @@ export interface ExtractOutput {
   data: unknown
   confidence: number
   reasoning: string
+  /** Echoed back from `ExtractInput.extractedFrom` — what was actually sent. */
   extractedFrom: 'text_only' | 'image_only' | 'text_and_image'
   /** Per-field confidence for price-sensitive fields. */
   priceFieldConfidence?: Record<string, 'high' | 'medium' | 'low'>
+  /** Model identifier used for this call. */
+  model: string
   rawResponse: unknown
   tokensUsed: { prompt: number; completion: number }
 }
@@ -179,6 +217,12 @@ export interface ExtractMeta {
   latencyMs: number
   model: string
   tokensUsed: { prompt: number; completion: number }
+  /**
+   * Modality used. Echoed from `ExtractInput.extractedFrom` (caller's claim
+   * about what it actually sent). LlmParser uses this — not any LLM-self-reported
+   * value — so the field reflects ground truth, not the model's introspection.
+   */
+  extractedFrom: 'text_only' | 'image_only' | 'text_and_image'
 }
 
 /** Typed result from the extractor, after Zod schema validation. */
