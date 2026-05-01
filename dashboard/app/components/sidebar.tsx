@@ -32,6 +32,16 @@ const DEFAULT_NAV: NavItem[] = [
     ),
   },
   {
+    href: "/signals",
+    label: "信号流",
+    icon: (
+      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12c0-5.385 4.365-9.75 9.75-9.75s9.75 4.365 9.75 9.75-4.365 9.75-9.75 9.75S2.25 17.385 2.25 12z" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 9h16.5m-16.5 6h16.5" />
+      </svg>
+    ),
+  },
+  {
     href: "/kols",
     label: "KOL 管理",
     icon: (

@@ -8,6 +8,8 @@ import { createDiscordRoutes } from './routes/discord.js'
 import { createMessageRoutes } from './routes/messages.js'
 import { createTradingConfigRoutes } from './routes/trading-config.js'
 import { createTradingRoutes } from './routes/trading.js'
+import { createSignalRoutes } from './routes/signals.js'
+import { createEventRoutes } from './routes/events.js'
 
 const PORT = Number(process.env.PORT ?? 3001)
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN
@@ -38,6 +40,8 @@ app.route('/api/discord', createDiscordRoutes(listener, messageStore))
 app.route('/api/messages', createMessageRoutes(messageStore, DISCORD_TOKEN))
 app.route('/api/trading/config', createTradingConfigRoutes())
 app.route('/api/trading', createTradingRoutes())
+app.route('/api/signals', createSignalRoutes())
+app.route('/api/events', createEventRoutes())
 
 serve({ fetch: app.fetch, port: PORT }, (info) => {
   console.log(`[Signal] Server running on http://localhost:${info.port}`)

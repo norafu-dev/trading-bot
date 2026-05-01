@@ -7,6 +7,8 @@ import type {
   BrokerConfigField,
   AccountBalance,
   TradePosition,
+  Signal,
+  PositionUpdate,
 } from "../../shared/types";
 
 // ==================== Generic fetch wrapper ====================
@@ -216,3 +218,65 @@ export interface ExportResult {
   total: number;
   messages: ExportRecord[];
 }
+
+// ==================== Signals API ====================
+
+/**
+ * Discriminated record returned by `GET /api/signals`. Mirrors the on-disk
+ * shape written by SignalStore — `kind` decides which downstream renderer
+ * the dashboard uses.
+ */
+export type SignalRecord =
+  | { kind: "signal"; record: Signal }
+  | { kind: "update"; record: PositionUpdate };
+
+export interface SignalListResult {
+  records: SignalRecord[];
+  total: number;
+  limit: number;
+}
+
+export interface SignalDetailResult {
+  signal: Signal;
+  updates: PositionUpdate[];
+}
+
+export const signalApi = {
+  list: (params?: { limit?: number; kolId?: string; since?: string }) => {
+    const search = new URLSearchParams();
+    if (params?.limit) search.set("limit", String(params.limit));
+    if (params?.kolId) search.set("kolId", params.kolId);
+    if (params?.since) search.set("since", params.since);
+    const qs = search.toString();
+    return api<SignalListResult>(`/signals${qs ? `?${qs}` : ""}`);
+  },
+  get: (id: string) => api<SignalDetailResult>(`/signals/${id}`),
+};
+
+// ==================== Events API ====================
+
+export interface EventEntry {
+  seq: number;
+  ts: number;
+  type: string;
+  payload: unknown;
+}
+
+export interface EventListResult {
+  entries: EventEntry[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}
+
+export const eventApi = {
+  list: (params?: { limit?: number; type?: string; page?: number }) => {
+    const search = new URLSearchParams();
+    if (params?.limit) search.set("limit", String(params.limit));
+    if (params?.type) search.set("type", params.type);
+    if (params?.page) search.set("page", String(params.page));
+    const qs = search.toString();
+    return api<EventListResult>(`/events${qs ? `?${qs}` : ""}`);
+  },
+};
