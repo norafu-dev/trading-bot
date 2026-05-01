@@ -61,7 +61,23 @@ export function createKolChannelRoutes(listener: DiscordListener | null) {
       const kols = await readKols()
       const idx = kols.findIndex((k) => k.id === id)
       if (idx === -1) return c.json({ error: `KOL "${id}" not found` }, 404)
-      kols[idx] = { ...kols[idx], ...parsed.data }
+      // Deep-merge parsingHints so callers that only edit a subset of hint
+      // fields (e.g. dashboard editing `style` + `imagePolicy`) don't blow away
+      // unrelated fields the signal domain owns (classifierExamples,
+      // extractorExamples, vocabulary, fieldDefaults). Other top-level fields
+      // remain a plain shallow merge — replacing a scalar like riskMultiplier
+      // is the obvious PUT semantics.
+      const existing = kols[idx]
+      const incoming = parsed.data
+      const mergedHints =
+        incoming.parsingHints !== undefined
+          ? { ...(existing.parsingHints ?? {}), ...incoming.parsingHints }
+          : existing.parsingHints
+      kols[idx] = {
+        ...existing,
+        ...incoming,
+        ...(mergedHints !== undefined && { parsingHints: mergedHints }),
+      }
       await writeKols(kols)
       autoReload(listener)
       return c.json(kols[idx])

@@ -6,6 +6,34 @@ import type { KolConfig, ChannelConfig } from '../../../../shared/types.js'
 
 // ==================== Schemas ====================
 
+// ── Parsing-related sub-schemas ─────────────────────────────────────────────
+//
+// These mirror `shared/types.ts` `KolConfig.parsingHints` etc. The signal
+// domain has a stricter discriminated-union form; the dashboard edits the
+// looser shared form. `passthrough()` on parsingHints preserves fields the
+// dashboard does not surface (e.g. classifierExamples/extractorExamples
+// written by the signal domain) so partial updates don't drop them.
+
+const parserTypeSchema = z.enum(['regex_structured', 'llm_text', 'llm_vision', 'hybrid'])
+
+const parsingHintsSchema = z.object({
+  style: z.string().optional(),
+  vocabulary: z.record(z.string()).optional(),
+  imagePolicy: z.enum(['required', 'optional', 'ignore']).optional(),
+  fieldDefaults: z
+    .object({
+      contractType: z.enum(['perpetual', 'spot']).optional(),
+      leverage: z.number().int().min(1).optional(),
+      side: z.enum(['long', 'short']).optional(),
+    })
+    .optional(),
+}).passthrough()
+
+const aggregatorOverridesSchema = z.object({
+  idleTimeoutMs: z.number().int().positive().optional(),
+  maxDurationMs: z.number().int().positive().optional(),
+}).optional()
+
 export const kolConfigSchema = z.object({
   id: z.string().min(1),
   label: z.string().min(1),
@@ -16,6 +44,15 @@ export const kolConfigSchema = z.object({
   defaultConviction: z.number().min(0).max(1).default(0.5),
   notes: z.string().optional(),
   addedAt: z.string(),
+
+  // ── Signal-pipeline fields ─────────────────────────────────────────────────
+  parsingStrategy: parserTypeSchema.optional(),
+  parsingHints: parsingHintsSchema.optional(),
+  regexConfigName: z.string().optional(),
+  confidenceOverride: z.number().min(0).max(1).optional(),
+  defaultSymbolQuote: z.string().optional(),
+  defaultContractType: z.enum(['perpetual', 'spot']).optional(),
+  aggregatorOverrides: aggregatorOverridesSchema,
 })
 
 export const channelConfigSchema = z.object({
