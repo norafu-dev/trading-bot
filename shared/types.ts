@@ -350,6 +350,17 @@ export interface PositionUpdate {
   parserType: ParserType
 
   /**
+   * Raw symbol exactly as the KOL wrote it ("BTC", "HUSDT", etc.).
+   * Required for the `by_kol_symbol` LinkStrategy when no external-id
+   * back-reference exists (typical of human KOLs).
+   *
+   * Optional because bot KOLs reference the source signal directly via
+   * `linkedExternalMessageId` (DEC-016) and never need symbol-based linking.
+   * Both fields can coexist; the linker tries external-id first regardless.
+   */
+  symbol?: string
+
+  /**
    * Semantic classification of what happened to the position.
    *
    * Only real, actionable update types appear here. Extractor-internal

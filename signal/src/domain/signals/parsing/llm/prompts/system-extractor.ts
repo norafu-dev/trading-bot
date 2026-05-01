@@ -64,6 +64,7 @@ other          — SENTINEL: cannot classify this update. Use only as a last res
 ## Field rules
 
 updateType           — Required. Pick the best-fitting value from the list above.
+symbol               — The symbol the update refers to, exactly as written ("BTC", "HUSDT"). Extract whenever the KOL names it; LinkStrategy uses this to find the original signal.
 level                — TP level that was hit (integer, 1-based). Only for tp_hit.
 closedPercent        — Percentage of position closed, as a decimal string ("50" = 50%).
 remainingPercent     — Percentage still open, as a decimal string.

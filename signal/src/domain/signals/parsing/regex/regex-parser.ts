@@ -110,6 +110,9 @@ function applyConfig(
 
     const f = upd.fields
     if (f) {
+      if (f.symbol) {
+        update.symbol = extract(f.symbol, text)
+      }
       if (f.linkedExternalMessageId) {
         update.linkedExternalMessageId = extract(f.linkedExternalMessageId, text)
       }

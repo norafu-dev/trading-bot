@@ -141,6 +141,7 @@ export class LlmParser implements IParser<LlmParseContext> {
       updateType: u.updateType as PositionUpdate['updateType'],
       confidence: u.confidence,
       extractedFrom: extractResult.meta.extractedFrom,
+      ...(u.symbol !== undefined && { symbol: u.symbol }),
       ...(u.externalMessageId !== undefined && { externalMessageId: u.externalMessageId }),
       ...(u.linkedExternalMessageId !== undefined && { linkedExternalMessageId: u.linkedExternalMessageId }),
       ...(u.level !== undefined && { level: u.level }),

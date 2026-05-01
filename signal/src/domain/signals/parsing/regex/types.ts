@@ -98,6 +98,7 @@ export interface RegexConfig {
     detector: string
     updateType: UpdateType
     fields?: {
+      symbol?: FieldExtractor
       linkedExternalMessageId?: FieldExtractor
       level?: FieldExtractor
       closedPercent?: FieldExtractor

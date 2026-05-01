@@ -58,6 +58,19 @@ export const positionUpdateExtractSchema = z.object({
   updateType: updateTypeSchema,
 
   /**
+   * Raw symbol the update refers to, exactly as written by the KOL.
+   * Examples: "BTC", "HUSDT", "ETH/USDT".
+   *
+   * Required for human KOLs whose updates have no embedded source-message
+   * link — the `by_kol_symbol` LinkStrategy uses (kolId, symbol) to find
+   * the originating Signal in the open set.
+   *
+   * Optional because bot KOLs always carry `linkedExternalMessageId` and
+   * are linked via `by_external_id` regardless of symbol.
+   */
+  symbol: z.string().optional(),
+
+  /**
    * Which TP level was hit.
    * Only meaningful when `updateType === 'tp_hit'`.
    * 1 = TP1, 2 = TP2, etc.
