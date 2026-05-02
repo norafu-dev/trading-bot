@@ -74,21 +74,18 @@ export interface SignalPipeline {
   shutdown(): Promise<void>
 }
 
-export interface PipelineDeps {
-  /**
-   * Optional persistent raw-message archive callback. Called BEFORE the
-   * pipeline runs so the source-of-truth message log captures every event,
-   * even ones the pre-pipeline drops.
-   */
-  archiveRaw?: (msg: RawDiscordMessage) => Promise<void>
-}
+// PipelineDeps was previously used to pass an archive callback. The archive
+// concern is now owned by the caller (main.ts wires it on the listener path
+// only) so the dev-tool inject route doesn't accidentally duplicate-write
+// messages into messages.jsonl when replaying a historical message.
+export type PipelineDeps = Record<string, never>
 
 /**
  * Build the full ingestion → routing pipeline. Idempotent on the dependency
  * level: a second call would create a second EventLog file handle, so the
  * caller is expected to invoke this exactly once at boot time.
  */
-export async function createPipeline(deps: PipelineDeps = {}): Promise<SignalPipeline> {
+export async function createPipeline(_deps: PipelineDeps = {}): Promise<SignalPipeline> {
   // ── 1. KOL registry (must be loaded before parsers/dispatcher health-check)
   const kolRegistry = new KolRegistry()
   await kolRegistry.load()
@@ -249,8 +246,6 @@ export async function createPipeline(deps: PipelineDeps = {}): Promise<SignalPip
   return {
     async handleDiscordMessage(msg: RawDiscordMessage): Promise<void> {
       try {
-        if (deps.archiveRaw) await deps.archiveRaw(msg)
-
         const rawMessage = toRawMessage(msg)
         const ctx: FilterContext = {
           kolRegistry,

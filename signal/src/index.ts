@@ -22,19 +22,23 @@ const DISCORD_TOKEN = process.env.DISCORD_TOKEN
 const messageStore = new MessageStore()
 await messageStore.init()
 
-// Compose the entire ingestion → parsing → routing pipeline. archiveRaw is
-// wired to the existing MessageStore so the source-of-truth raw message log
-// is unchanged from before Batch 7. Crash recovery (SignalIndexBuilder.rebuild)
-// runs inside createPipeline before any dispatch can happen.
-const pipeline = await createPipeline({
-  archiveRaw: (msg) => messageStore.append(msg),
-})
+// Compose the entire ingestion → parsing → routing pipeline. Crash recovery
+// (SignalIndexBuilder.rebuild) runs inside createPipeline before any dispatch
+// can happen.
+const pipeline = await createPipeline()
 
 let listener: DiscordListener | null = null
 if (DISCORD_TOKEN) {
   listener = new DiscordListener({
     token: DISCORD_TOKEN,
-    onMessage: pipeline.handleDiscordMessage,
+    onMessage: async (msg) => {
+      // Archive every raw message first so the source-of-truth log captures
+      // even pre-pipeline-dropped events. Note: the dev-tool inject route
+      // bypasses this on purpose — replaying a historical message must NOT
+      // append a duplicate to messages.jsonl.
+      await messageStore.append(msg)
+      await pipeline.handleDiscordMessage(msg)
+    },
   })
   void listener.start()
 } else {
