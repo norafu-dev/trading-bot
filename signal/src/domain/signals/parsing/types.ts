@@ -212,6 +212,18 @@ export interface LlmParseContext extends BaseParseContext {
    * as before Layer 2.
    */
   priceService?: import('../../../connectors/market/types.js').IPriceService
+  /**
+   * Optional remote-image fetcher. Discord CDN serves attachments fine to
+   * residential / VPS IPs, but blocks the cloud IPs that LLM provider
+   * image-fetch services run from — so a raw Discord URL passed to a
+   * vision LLM reliably 404s on the provider side. When this is wired in,
+   * the Extractor downloads attachment / embed images itself and feeds them
+   * to the model as `data:` URLs, sidestepping the IP block.
+   *
+   * Optional because tests don't need real network access and KOLs whose
+   * `parsingHints.imagePolicy === 'ignore'` don't need image bytes at all.
+   */
+  imageFetcher?: import('../../../connectors/discord/image-fetcher.js').IImageFetcher
 }
 
 // ── Classifier / Extractor ───────────────────────────────────────────────────

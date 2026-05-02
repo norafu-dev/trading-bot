@@ -13,6 +13,7 @@ import type {
   LlmParseContext,
 } from '../types.js'
 import { buildExtractMessages, buildExtractorSystemPrompt, buildPriceHintBlock } from './prompts/render.js'
+import { resolveImageUrls } from './image-resolution.js'
 import type { IPriceService, PriceQuote } from '../../../../connectors/market/types.js'
 
 const EMPTY_META = (model: string): ExtractMeta => ({
@@ -44,7 +45,16 @@ export class Extractor implements IExtractor {
     const baseSystemPrompt = buildExtractorSystemPrompt(ctx.kol, kind)
     const imagePolicy = ctx.kol.parsingHints?.imagePolicy ?? 'optional'
     const includeImages = imagePolicy !== 'ignore'
-    const { messages, extractedFrom } = buildExtractMessages(ctx.bundle, includeImages)
+    const built = buildExtractMessages(ctx.bundle, includeImages)
+    const extractedFrom = built.extractedFrom
+    // Resolve any remote image URLs in `messages` into base64 data URLs.
+    // Discord CDN blocks LLM-provider IPs, so a raw URL passed to a vision
+    // LLM 404s. Our process can fetch fine — convert here so the provider
+    // call sees the bytes inline. Failures degrade silently (the offending
+    // URL stays put; LLM may not see that one image but the rest goes).
+    const messages = ctx.imageFetcher
+      ? await resolveImageUrls(built.messages, ctx.imageFetcher)
+      : built.messages
 
     // Layer-2 price hint: pre-fetch live prices for the most likely symbols
     // detected in the bundle text, so the LLM can unit-normalise shorthand

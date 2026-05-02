@@ -4,6 +4,7 @@ import type {
   IClassifier,
   LlmParseContext,
 } from '../types.js'
+import { collectImageUrls, resolveImageUrls } from './image-resolution.js'
 import { buildClassifierSystemPrompt, buildClassifyMessages, getClassifyFewShots } from './prompts/render.js'
 
 /**
@@ -20,7 +21,17 @@ export class Classifier implements IClassifier {
   async classify(ctx: LlmParseContext): Promise<ClassifyOutput> {
     const systemPrompt = buildClassifierSystemPrompt(ctx.kol)
     const fewShots = getClassifyFewShots(ctx.kol)
-    const messages = buildClassifyMessages(ctx.bundle, fewShots)
+
+    // Include chart screenshots in the classify call when the KOL's image
+    // policy allows it. Without this a vision-only signal (Neil's chart
+    // post + just a channel-ping mention) gets judged chitchat because
+    // the classifier sees no signal-shaped text at all.
+    const imagePolicy = ctx.kol.parsingHints?.imagePolicy ?? 'optional'
+    const candidateUrls = imagePolicy !== 'ignore' ? collectImageUrls(ctx.bundle) : []
+    const builtMessages = buildClassifyMessages(ctx.bundle, fewShots, candidateUrls)
+    const messages = candidateUrls.length > 0 && ctx.imageFetcher
+      ? await resolveImageUrls(builtMessages, ctx.imageFetcher)
+      : builtMessages
 
     const startedAt = Date.now()
     const output = await ctx.llmProvider.classify({

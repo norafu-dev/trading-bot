@@ -14,6 +14,7 @@ import { createLlmConfigRoutes } from './routes/llm-config.js'
 import { createPipelineRoutes } from './routes/pipeline.js'
 import { createMarketRoutes } from './routes/market.js'
 import { CcxtPriceService } from './connectors/market/price-service.js'
+import { ImageFetcher } from './connectors/discord/image-fetcher.js'
 import { createPipeline } from './pipeline.js'
 import { logger } from './core/logger.js'
 
@@ -29,10 +30,16 @@ await messageStore.init()
 // /api/market/price route.
 const priceService = new CcxtPriceService({ exchangeName: 'binance' })
 
+// Image fetcher — pulls Discord CDN images into base64 data URLs so the
+// vision LLM doesn't see Discord's IP-blocked URL. Also auto-refreshes
+// expired Discord URLs via the official attachment refresh endpoint
+// (passing the selfbot token). Without the token, stale URLs simply fail.
+const imageFetcher = new ImageFetcher({ discordToken: DISCORD_TOKEN })
+
 // Compose the entire ingestion → parsing → routing pipeline. Crash recovery
 // (SignalIndexBuilder.rebuild) runs inside createPipeline before any dispatch
 // can happen.
-const pipeline = await createPipeline({ priceService })
+const pipeline = await createPipeline({ priceService, imageFetcher })
 
 let listener: DiscordListener | null = null
 if (DISCORD_TOKEN) {

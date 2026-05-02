@@ -60,11 +60,18 @@ export function getClassifyFewShots(_kol: KolConfig): ClassifyFewShot[] {
  *   user      — few-shot example message text
  *   assistant — expected label + reasoning (as JSON)
  *   …repeated for each few-shot…
- *   user      — the live bundle text to classify
+ *   user      — the live bundle text to classify (+ images if provided)
+ *
+ * When `bundleImages` is non-empty, the final user message becomes a
+ * multimodal content array — the classifier can then look at chart
+ * screenshots before deciding signal vs chitchat. Crucial for KOLs whose
+ * signals live entirely in images (Neil-style); without it the classifier
+ * sees only the channel ping mention and judges chitchat.
  */
 export function buildClassifyMessages(
   bundle: MessageBundle,
   fewShots: ClassifyFewShot[],
+  bundleImages: string[] = [],
 ): LlmMessage[] {
   const messages: LlmMessage[] = []
 
@@ -84,7 +91,18 @@ export function buildClassifyMessages(
     .filter(Boolean)
     .join('\n---\n')
 
-  messages.push({ role: 'user', content: bundleText })
+  if (bundleImages.length === 0) {
+    messages.push({ role: 'user', content: bundleText })
+    return messages
+  }
+
+  // Multimodal final user message — text + every image part.
+  const parts: unknown[] = []
+  if (bundleText) parts.push({ type: 'text', text: bundleText })
+  for (const url of bundleImages) {
+    parts.push({ type: 'image_url', image_url: { url } })
+  }
+  messages.push({ role: 'user', content: parts })
   return messages
 }
 

@@ -78,13 +78,20 @@ export interface SignalPipeline {
 /**
  * Optional collaborators wired in by main.ts.
  *
- * Currently only the price service — used to compute `Signal.priceCheck`
- * (live-market sanity layer) right after extraction. Optional because dev
- * boots without exchange access still need to function; price-check just
- * stays absent on the resulting Signal.
+ * - `priceService`: live-market quote source. Used to compute
+ *   `Signal.priceCheck` (live-market sanity layer) AND to inject a
+ *   price hint into the extractor system prompt for unit normalisation.
+ * - `imageFetcher`: downloads Discord CDN images and feeds them to the
+ *   LLM as `data:` URLs. Discord blocks LLM-provider IPs, so vision
+ *   without this is broken.
+ *
+ * Both are optional — dev boots without exchange / network access still
+ * need to function. Their absence degrades silently: no price-check, no
+ * vision support, but the rest of the pipeline runs as before.
  */
 export interface PipelineDeps {
   priceService?: import('./connectors/market/types.js').IPriceService
+  imageFetcher?: import('./connectors/discord/image-fetcher.js').IImageFetcher
 }
 
 /**
@@ -168,6 +175,7 @@ export async function createPipeline(deps: PipelineDeps = {}): Promise<SignalPip
     llmProvider,
     sessionLogger,
     deps.priceService,
+    deps.imageFetcher,
   )
   // Only health-check if we have the parsers a strategy requires; otherwise
   // skip so a dev-mode boot without OPENROUTER_API_KEY isn't fatal.

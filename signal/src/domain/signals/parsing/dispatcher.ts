@@ -1,3 +1,4 @@
+import type { IImageFetcher } from '../../../connectors/discord/image-fetcher.js'
 import type { IPriceService } from '../../../connectors/market/types.js'
 import type { MessageBundle } from '../ingestion/aggregator/types.js'
 import type { KolConfig, IKolRegistry } from '../kol/types.js'
@@ -36,6 +37,12 @@ export class ParserDispatcher {
      * system prompt for unit normalisation. Layer 2 of price-check.
      */
     private readonly priceService?: IPriceService,
+    /**
+     * Optional — when present the Extractor pre-downloads attachment /
+     * embed images and feeds them to the LLM as `data:` URLs (Discord's
+     * CDN blocks LLM-provider IPs, so URLs sent verbatim 404).
+     */
+    private readonly imageFetcher?: IImageFetcher,
   ) {}
 
   async dispatch(bundle: MessageBundle): Promise<ParseResult> {
@@ -75,6 +82,7 @@ export class ParserDispatcher {
       llmProvider: this.llmProvider,
       sessionLogger: this.sessionLogger,
       ...(this.priceService && { priceService: this.priceService }),
+      ...(this.imageFetcher && { imageFetcher: this.imageFetcher }),
     }
     const parser = this.registry.getLlm(strategy)
     return parser.parse(llmCtx)
