@@ -1,5 +1,6 @@
 import type { KolConfig } from '../../../../../../../shared/types.js'
 import type { MessageBundle } from '../../../ingestion/aggregator/types.js'
+import type { PriceQuote } from '../../../../../connectors/market/types.js'
 import type { ClassifyFewShot, ExtractInput, LlmMessage } from '../../types.js'
 import { flattenMessage } from '../../common/flatten.js'
 import { GLOBAL_CLASSIFY_FEWSHOTS } from './fewshots-global.js'
@@ -7,6 +8,39 @@ import { buildClassifierSystemPrompt } from './system-classifier.js'
 import { buildExtractorSystemPrompt } from './system-extractor.js'
 
 export { buildClassifierSystemPrompt, buildExtractorSystemPrompt }
+
+/**
+ * Builds the "Live Market Price" block appended to the extractor system
+ * prompt when a price hint is available. The wording is deliberately
+ * explicit about Chinese shorthand ("万" = ×10000) because that's where
+ * the unit-normalisation problem hits hardest.
+ *
+ * Returns an empty string when `quotes` is empty so callers can
+ * unconditionally `${baseSystem}\n\n${buildPriceHintBlock(quotes)}` and
+ * get a clean prompt either way.
+ */
+export function buildPriceHintBlock(quotes: PriceQuote[]): string {
+  if (quotes.length === 0) return ''
+  const rows = quotes.map((q) => `  ${q.ccxtSymbol}: ${q.price} (${q.source})`).join('\n')
+  return `## Live Market Price (unit-normalisation reference)
+
+${rows}
+
+CRITICAL: KOLs frequently abbreviate prices. If the live price is 78176 but
+the message says "7.67" or "7.67万", the KOL means 76700 — the unit "万"
+(Chinese for 10000) is implicit. Always output the FULL numeric magnitude
+that matches the live market, never the literal shorthand.
+
+Examples of correct unit normalisation when live BTC = 78176:
+  "入场 7.67"        → entry.price = "76700"
+  "止损 7.58万"       → stopLoss.price = "75800"
+  "TP 8.0"           → takeProfits[].price = "80000"
+  "0.766"            → wrong magnitude, treat as "76600"
+  "76500"            → already full magnitude, keep as-is
+
+If the symbol is NOT listed above, normalise as best you can without the
+reference — the live price was unavailable for that token.`
+}
 
 /**
  * Returns the few-shot examples to include in a classifier call.

@@ -1,3 +1,4 @@
+import type { IPriceService } from '../../../connectors/market/types.js'
 import type { MessageBundle } from '../ingestion/aggregator/types.js'
 import type { KolConfig, IKolRegistry } from '../kol/types.js'
 import type {
@@ -29,6 +30,12 @@ export class ParserDispatcher {
     private readonly kolRegistry: IKolRegistry,
     private readonly llmProvider?: ILlmProvider,
     private readonly sessionLogger?: ISessionLogger,
+    /**
+     * Optional — when present the LlmParseContext gains a `priceService`
+     * field that the Extractor uses to inject a live price hint into the
+     * system prompt for unit normalisation. Layer 2 of price-check.
+     */
+    private readonly priceService?: IPriceService,
   ) {}
 
   async dispatch(bundle: MessageBundle): Promise<ParseResult> {
@@ -67,6 +74,7 @@ export class ParserDispatcher {
       ...baseCtx,
       llmProvider: this.llmProvider,
       sessionLogger: this.sessionLogger,
+      ...(this.priceService && { priceService: this.priceService }),
     }
     const parser = this.registry.getLlm(strategy)
     return parser.parse(llmCtx)

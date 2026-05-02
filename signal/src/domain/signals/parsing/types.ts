@@ -200,6 +200,18 @@ export interface BaseParseContext {
 export interface LlmParseContext extends BaseParseContext {
   llmProvider: ILlmProvider
   sessionLogger: ISessionLogger
+  /**
+   * Optional live-market price service. When present, the Extractor will
+   * pre-fetch a price hint for the most likely symbol detected in the
+   * bundle text and inject it into the system prompt so the LLM can
+   * unit-normalise shorthand (KOL writes "7.67" → 76700 when BTC trades
+   * in the tens of thousands).
+   *
+   * Optional because tests / dev boots without exchange connectivity must
+   * still work; in that case the LLM extracts without the hint, exactly
+   * as before Layer 2.
+   */
+  priceService?: import('../../../connectors/market/types.js').IPriceService
 }
 
 // ── Classifier / Extractor ───────────────────────────────────────────────────

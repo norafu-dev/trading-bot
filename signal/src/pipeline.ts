@@ -167,6 +167,7 @@ export async function createPipeline(deps: PipelineDeps = {}): Promise<SignalPip
     kolRegistry,
     llmProvider,
     sessionLogger,
+    deps.priceService,
   )
   // Only health-check if we have the parsers a strategy requires; otherwise
   // skip so a dev-mode boot without OPENROUTER_API_KEY isn't fatal.

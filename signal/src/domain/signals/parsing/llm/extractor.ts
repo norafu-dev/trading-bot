@@ -1,7 +1,9 @@
 import type { ZodSchema } from 'zod'
 import { logger } from '../../../../core/logger.js'
 import { newUlid } from '../../../../core/ids.js'
+import { flattenBundle } from '../common/flatten.js'
 import { signalExtractSchema } from '../common/signal-schema.js'
+import { detectSymbols } from '../common/symbol-detect.js'
 import { positionUpdateExtractSchema } from '../common/update-schema.js'
 import type {
   ExtractMeta,
@@ -10,7 +12,8 @@ import type {
   LlmCallRecord,
   LlmParseContext,
 } from '../types.js'
-import { buildExtractMessages, buildExtractorSystemPrompt } from './prompts/render.js'
+import { buildExtractMessages, buildExtractorSystemPrompt, buildPriceHintBlock } from './prompts/render.js'
+import type { IPriceService, PriceQuote } from '../../../../connectors/market/types.js'
 
 const EMPTY_META = (model: string): ExtractMeta => ({
   latencyMs: 0,
@@ -38,10 +41,31 @@ export class Extractor implements IExtractor {
     kind: 'signal' | 'update',
     schema: ZodSchema<T>,
   ): Promise<ExtractResult<T>> {
-    const systemPrompt = buildExtractorSystemPrompt(ctx.kol, kind)
+    const baseSystemPrompt = buildExtractorSystemPrompt(ctx.kol, kind)
     const imagePolicy = ctx.kol.parsingHints?.imagePolicy ?? 'optional'
     const includeImages = imagePolicy !== 'ignore'
     const { messages, extractedFrom } = buildExtractMessages(ctx.bundle, includeImages)
+
+    // Layer-2 price hint: pre-fetch live prices for the most likely symbols
+    // detected in the bundle text, so the LLM can unit-normalise shorthand
+    // like "7.67" → 76700 when BTC trades in the tens of thousands.
+    // Only meaningful for signal extraction (updates inherit symbol from
+    // their parent signal). Failures degrade silently — extraction proceeds
+    // without the hint.
+    const quotes: PriceQuote[] = []
+    if (kind === 'signal' && ctx.priceService) {
+      try {
+        quotes.push(...(await fetchPriceHints(ctx.bundle, ctx.priceService, ctx.kol.defaultContractType)))
+      } catch (err) {
+        logger.debug(
+          { err, bundleId: ctx.bundle.id },
+          'Extractor: price-hint pre-fetch failed; extracting without hint',
+        )
+      }
+    }
+    const systemPrompt = quotes.length > 0
+      ? `${baseSystemPrompt}\n\n${buildPriceHintBlock(quotes)}`
+      : baseSystemPrompt
 
     const startedAt = Date.now()
     let output
@@ -128,4 +152,28 @@ export class Extractor implements IExtractor {
 
     return { ok: true, data: validated.data, meta }
   }
+}
+
+/**
+ * Pre-extract symbol candidates from the bundle text and ask the price
+ * service for a live quote on each. Returns up to 2 successful quotes —
+ * enough for the LLM to anchor unit-normalisation, not so many that the
+ * system prompt balloons.
+ */
+async function fetchPriceHints(
+  bundle: { messages: import('../../ingestion/types.js').RawMessage[] },
+  priceService: IPriceService,
+  defaultContractType: 'spot' | 'perpetual' | undefined,
+): Promise<PriceQuote[]> {
+  const text = flattenBundle({ messages: bundle.messages } as Parameters<typeof flattenBundle>[0])
+  const candidates = detectSymbols(text, 3)
+  if (candidates.length === 0) return []
+
+  const quotes: PriceQuote[] = []
+  for (const c of candidates) {
+    if (quotes.length >= 2) break
+    const q = await priceService.getPrice(c.symbol, defaultContractType ?? 'perpetual')
+    if (q) quotes.push(q)
+  }
+  return quotes
 }
