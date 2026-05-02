@@ -10,6 +10,8 @@ import { createTradingConfigRoutes } from './routes/trading-config.js'
 import { createTradingRoutes } from './routes/trading.js'
 import { createSignalRoutes } from './routes/signals.js'
 import { createEventRoutes } from './routes/events.js'
+import { createPipeline } from './pipeline.js'
+import { logger } from './core/logger.js'
 
 const PORT = Number(process.env.PORT ?? 3001)
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN
@@ -18,18 +20,34 @@ const DISCORD_TOKEN = process.env.DISCORD_TOKEN
 const messageStore = new MessageStore()
 await messageStore.init()
 
+// Compose the entire ingestion → parsing → routing pipeline. archiveRaw is
+// wired to the existing MessageStore so the source-of-truth raw message log
+// is unchanged from before Batch 7. Crash recovery (SignalIndexBuilder.rebuild)
+// runs inside createPipeline before any dispatch can happen.
+const pipeline = await createPipeline({
+  archiveRaw: (msg) => messageStore.append(msg),
+})
+
 let listener: DiscordListener | null = null
 if (DISCORD_TOKEN) {
   listener = new DiscordListener({
     token: DISCORD_TOKEN,
-    onMessage: async (msg) => {
-      await messageStore.append(msg)
-    },
+    onMessage: pipeline.handleDiscordMessage,
   })
   void listener.start()
 } else {
-  console.warn('[Signal] DISCORD_TOKEN not set — Discord listener disabled')
+  logger.warn('DISCORD_TOKEN not set — Discord listener disabled (pipeline still ready for direct dispatch)')
 }
+
+// Graceful shutdown: flush any open MessageBundle windows before exiting so
+// we don't lose messages that haven't yet hit the parser.
+const shutdown = async (signal: string) => {
+  logger.info({ signal }, 'Shutdown signal received — flushing pipeline')
+  await pipeline.shutdown()
+  process.exit(0)
+}
+process.on('SIGINT', () => void shutdown('SIGINT'))
+process.on('SIGTERM', () => void shutdown('SIGTERM'))
 
 // ---- App ----
 const app = new Hono()
