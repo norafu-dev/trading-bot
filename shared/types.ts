@@ -302,6 +302,53 @@ export interface Signal {
     description: string
   }
 
+  /**
+   * Live-market sanity check, attached after extraction. Computed by the
+   * price-check layer using a fresh exchange ticker. When the resolution
+   * fails (symbol unknown / network) the field is omitted entirely.
+   *
+   * Used by Phase 4 guards to:
+   *  - veto signals whose entry has already been blown past (`stale`)
+   *  - flag obvious unit typos (~1000× off from the live price)
+   *  - surface the gap on the dashboard for operator awareness
+   *
+   * All numeric values are Decimal strings.
+   */
+  priceCheck?: {
+    /** Live last-trade price at the moment of check. Decimal string. */
+    currentPrice: string
+    /** Exchange that returned the price, e.g. "binance". */
+    source: string
+    /** ISO 8601 — when the quote was fetched. */
+    fetchedAt: string
+    /**
+     * Signed % distance from `currentPrice` to the signal's reference entry
+     * (single price, or the centre of a range). Positive = entry is ABOVE
+     * the live price; negative = below. Decimal string, e.g. "1.34" or "-0.5".
+     * Omitted when no entry price is present on the signal.
+     */
+    entryDistancePercent?: string
+    /**
+     * True when the signal's entry has already been crossed in the wrong
+     * direction (long: live > entry by more than `staleThresholdPercent`,
+     * short: live < entry by more than the threshold). Phase 4 guards
+     * typically reject stale signals.
+     */
+    stale?: boolean
+    /**
+     * True when entry / SL / TP differ from `currentPrice` by ~3 orders of
+     * magnitude or more — a strong "KOL wrote 7.66 meaning 76600" signal.
+     * Distinct from the LLM-judged `unitAnomaly` above; this one is computed
+     * from the live market price, not from the relationship between fields.
+     */
+    unitMismatch?: boolean
+    /**
+     * Free-text description shown on the dashboard / logged for ops.
+     * Example: "live 76521, entry 76500 — 0.03% inside; long is fresh"
+     */
+    note?: string
+  }
+
   notes?: string
   /** LLM chain-of-thought. Stored for prompt-engineering audits only. */
   reasoning?: string

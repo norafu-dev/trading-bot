@@ -292,6 +292,8 @@ function SignalCard({ signal, kol }: { signal: Signal; kol?: KolConfig }) {
             </div>
           )}
 
+          {signal.priceCheck && <PriceCheckBar check={signal.priceCheck} />}
+
           {/* Footer */}
           <div className="mt-3 flex items-center justify-between text-[11px] text-muted-foreground">
             <button
@@ -401,6 +403,52 @@ function UpdateCard({ update, kol }: { update: PositionUpdate; kol?: KolConfig }
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Compact bar showing the live-market price-check attached to a Signal.
+ * Three states: unitMismatch (red, very loud), stale (amber), fresh (subtle blue).
+ */
+function PriceCheckBar({ check }: { check: NonNullable<Signal["priceCheck"]> }) {
+  const tone = check.unitMismatch
+    ? "border-red-500/40 bg-red-500/10 text-red-400"
+    : check.stale
+    ? "border-amber-500/30 bg-amber-500/10 text-amber-400"
+    : "border-blue-500/20 bg-blue-500/5 text-blue-400";
+
+  const icon = check.unitMismatch ? "🚫" : check.stale ? "⚠️" : "📊";
+  const headline = check.unitMismatch
+    ? "单位疑似错位"
+    : check.stale
+    ? "价格已偏离入场点"
+    : "对照实时价";
+
+  const distRaw = check.entryDistancePercent;
+  const dist = distRaw !== undefined ? Number(distRaw) : undefined;
+  const distLabel =
+    dist === undefined
+      ? null
+      : `入场${dist >= 0 ? "高于" : "低于"}现价 ${Math.abs(dist).toFixed(2)}%`;
+
+  return (
+    <div className={`mt-2 rounded-md border px-2 py-1.5 text-xs ${tone}`}>
+      <div className="flex items-center gap-2">
+        <span className="shrink-0">{icon}</span>
+        <span className="font-medium">{headline}</span>
+        <span className="ml-auto font-mono text-[10px] opacity-70">
+          live {check.currentPrice} ({check.source})
+        </span>
+      </div>
+      {distLabel && (
+        <div className="mt-1 text-[11px] opacity-90">{distLabel}</div>
+      )}
+      {check.note && check.note !== distLabel && (
+        <div className="mt-0.5 truncate text-[10px] opacity-60" title={check.note}>
+          {check.note}
+        </div>
+      )}
     </div>
   );
 }

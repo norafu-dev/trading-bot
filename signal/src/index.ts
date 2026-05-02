@@ -12,6 +12,8 @@ import { createSignalRoutes } from './routes/signals.js'
 import { createEventRoutes } from './routes/events.js'
 import { createLlmConfigRoutes } from './routes/llm-config.js'
 import { createPipelineRoutes } from './routes/pipeline.js'
+import { createMarketRoutes } from './routes/market.js'
+import { CcxtPriceService } from './connectors/market/price-service.js'
 import { createPipeline } from './pipeline.js'
 import { logger } from './core/logger.js'
 
@@ -22,10 +24,15 @@ const DISCORD_TOKEN = process.env.DISCORD_TOKEN
 const messageStore = new MessageStore()
 await messageStore.init()
 
+// Public-API price service — no auth, used by the price-check sanity layer
+// (catch laypress unit anomalies / stale signal points) and by the dashboard
+// /api/market/price route.
+const priceService = new CcxtPriceService({ exchangeName: 'binance' })
+
 // Compose the entire ingestion → parsing → routing pipeline. Crash recovery
 // (SignalIndexBuilder.rebuild) runs inside createPipeline before any dispatch
 // can happen.
-const pipeline = await createPipeline()
+const pipeline = await createPipeline({ priceService })
 
 let listener: DiscordListener | null = null
 if (DISCORD_TOKEN) {
@@ -68,6 +75,7 @@ app.route('/api/signals', createSignalRoutes())
 app.route('/api/events', createEventRoutes())
 app.route('/api/config/llm', createLlmConfigRoutes())
 app.route('/api/pipeline', createPipelineRoutes(pipeline, messageStore))
+app.route('/api/market', createMarketRoutes(priceService))
 
 serve({ fetch: app.fetch, port: PORT }, (info) => {
   console.log(`[Signal] Server running on http://localhost:${info.port}`)

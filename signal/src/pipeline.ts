@@ -27,6 +27,7 @@ import { logger } from './core/logger.js'
 import { PATHS } from './core/paths.js'
 import type { MessageBundle } from './domain/signals/ingestion/aggregator/types.js'
 import { MessageAggregator } from './domain/signals/ingestion/aggregator/index.js'
+import { computePriceCheck } from './domain/signals/price-check.js'
 import { createDefaultPrePipeline } from './domain/signals/ingestion/pre-pipeline/index.js'
 import type { FilterContext } from './domain/signals/ingestion/pre-pipeline/types.js'
 import type { RawMessage } from './domain/signals/ingestion/types.js'
@@ -74,18 +75,24 @@ export interface SignalPipeline {
   shutdown(): Promise<void>
 }
 
-// PipelineDeps was previously used to pass an archive callback. The archive
-// concern is now owned by the caller (main.ts wires it on the listener path
-// only) so the dev-tool inject route doesn't accidentally duplicate-write
-// messages into messages.jsonl when replaying a historical message.
-export type PipelineDeps = Record<string, never>
+/**
+ * Optional collaborators wired in by main.ts.
+ *
+ * Currently only the price service — used to compute `Signal.priceCheck`
+ * (live-market sanity layer) right after extraction. Optional because dev
+ * boots without exchange access still need to function; price-check just
+ * stays absent on the resulting Signal.
+ */
+export interface PipelineDeps {
+  priceService?: import('./connectors/market/types.js').IPriceService
+}
 
 /**
  * Build the full ingestion → routing pipeline. Idempotent on the dependency
  * level: a second call would create a second EventLog file handle, so the
  * caller is expected to invoke this exactly once at boot time.
  */
-export async function createPipeline(_deps: PipelineDeps = {}): Promise<SignalPipeline> {
+export async function createPipeline(deps: PipelineDeps = {}): Promise<SignalPipeline> {
   // ── 1. KOL registry (must be loaded before parsers/dispatcher health-check)
   const kolRegistry = new KolRegistry()
   await kolRegistry.load()
@@ -187,6 +194,21 @@ export async function createPipeline(_deps: PipelineDeps = {}): Promise<SignalPi
   aggregator.onBundleClosed(async (bundle: MessageBundle) => {
     try {
       const result = await dispatcher.dispatch(bundle)
+      // Attach a live-market price check before routing. We only do this
+      // for `signal` results — `update` records and discards/failures don't
+      // need the check (updates inherit context from their linked signal).
+      if (result.kind === 'signal' && deps.priceService) {
+        try {
+          const check = await computePriceCheck(result.signal, deps.priceService)
+          if (check) result.signal.priceCheck = check
+        } catch (err) {
+          // Price-check failures must NEVER block a signal — log and move on.
+          logger.warn(
+            { err, signalId: result.signal.id, symbol: result.signal.symbol },
+            'Pipeline: priceCheck threw; routing signal without it',
+          )
+        }
+      }
       await router.route(result)
     } catch (err) {
       logger.error(
