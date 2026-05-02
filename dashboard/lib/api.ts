@@ -325,3 +325,21 @@ export const llmConfigApi = {
       body: JSON.stringify(data),
     }),
 };
+
+// ==================== Pipeline (dev tool) API ====================
+
+export interface InjectResult {
+  ok: boolean;
+  injected: string[];
+  missing: string[];
+  message: string;
+}
+
+export const pipelineApi = {
+  inject: (messageIds: string[]) =>
+    api<InjectResult>("/pipeline/inject", {
+      method: "POST",
+      body: JSON.stringify({ messageIds }),
+    }),
+  flush: () => api<{ ok: boolean }>("/pipeline/flush", { method: "POST" }),
+};

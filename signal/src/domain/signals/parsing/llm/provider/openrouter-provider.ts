@@ -43,14 +43,22 @@ export class OpenRouterProvider implements ILlmProvider {
   }
 
   async classify(input: ClassifyInput): Promise<ClassifyOutput> {
+    // NB: avoid Zod's .min/.max on number/string — Anthropic via OpenRouter
+    // rejects JSON Schemas containing minimum/maximum/minLength constraints.
+    // Use refine() so the validation runs after parse, but the JSON Schema
+    // shipped to the provider stays plain.
     const classifySchema = z.object({
       label: classificationLabelSchema,
-      confidence: z.number().min(0).max(1),
-      reasoning: z.string().min(20),
+      confidence: z
+        .number()
+        .refine((n) => n >= 0 && n <= 1, { message: 'confidence must be in [0, 1]' }),
+      reasoning: z
+        .string()
+        .refine((s) => s.length >= 20, { message: 'reasoning must be ≥ 20 chars' }),
     })
 
     const { object, usage } = await generateObject({
-      model: this.client(this.classifyModel),
+      model: this.client.chat(this.classifyModel),
       system: input.systemPrompt,
       messages: toModelMessages(input.messages),
       schema: classifySchema,
@@ -71,7 +79,7 @@ export class OpenRouterProvider implements ILlmProvider {
 
   async extract(input: ExtractInput): Promise<ExtractOutput> {
     const { object, usage } = await generateObject({
-      model: this.client(this.extractModel),
+      model: this.client.chat(this.extractModel),
       system: input.systemPrompt,
       messages: toModelMessages(input.messages),
       schema: input.schema,

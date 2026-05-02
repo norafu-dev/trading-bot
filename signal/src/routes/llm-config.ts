@@ -90,7 +90,7 @@ export function createLlmConfigRoutes() {
         const client = createOpenAI({ apiKey: cfg.apiKey, baseURL: cfg.baseUrl })
         const startedAt = Date.now()
         const { object, usage } = await generateObject({
-          model: client(cfg.classifyModel),
+          model: client.chat(cfg.classifyModel),
           schema: z.object({
             ok: z.boolean(),
             note: z.string(),

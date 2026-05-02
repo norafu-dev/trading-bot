@@ -1,4 +1,5 @@
 import type { ZodSchema } from 'zod'
+import { logger } from '../../../../core/logger.js'
 import { newUlid } from '../../../../core/ids.js'
 import { signalExtractSchema } from '../common/signal-schema.js'
 import { positionUpdateExtractSchema } from '../common/update-schema.js'
@@ -56,6 +57,17 @@ export class Extractor implements IExtractor {
       })
     } catch (err) {
       const latencyMs = Date.now() - startedAt
+      const detail = err instanceof Error ? (err.cause ?? err.stack ?? err.message) : String(err)
+      logger.warn(
+        {
+          err,
+          detail,
+          kolId: ctx.kol.id,
+          bundleId: ctx.bundle.id,
+          model: 'unknown', // provider hadn't returned, so we don't know which yet
+        },
+        'Extractor: provider call threw',
+      )
       // TODO(future): classify provider errors (HTTP 401/429/5xx vs schema
       // validation vs network timeout) so retry logic upstream can be precise.
       return {

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RawDiscordMessage, ChannelConfig, KolConfig } from "@shared/types";
-import { messageApi, channelApi, discordApi, kolApi } from "@/lib/api";
+import { messageApi, channelApi, discordApi, kolApi, pipelineApi } from "@/lib/api";
 import type { DiscordStatus } from "@/lib/api";
 
 const CH_ORDER_KEY = "messages-channel-order";
@@ -59,6 +59,52 @@ function groupMessages(msgs: RawDiscordMessage[]) {
     else { groups.push({ author: msg.authorUsername, authorId: msg.authorId, messages: [msg] }); }
   }
   return groups;
+}
+
+/**
+ * "Replay" button — feeds the listed messageIds back through the live
+ * pipeline (pre-pipeline → aggregator → dispatcher → router) and force-flushes
+ * the aggregator so results appear on /signals and /events immediately,
+ * not after the 30s idle window. Hidden until the parent group is hovered to
+ * keep production-style noise out of the feed.
+ */
+function ReplayButton({ messageIds }: { messageIds: string[] }) {
+  const [busy, setBusy] = useState(false);
+  const [feedback, setFeedback] = useState<string | null>(null);
+
+  async function handleClick() {
+    setBusy(true);
+    setFeedback(null);
+    try {
+      const r = await pipelineApi.inject(messageIds);
+      setFeedback(
+        r.injected.length > 0
+          ? `已注入 ${r.injected.length} 条 — 去 /signals 或 /events 看结果`
+          : `没找到这 ${messageIds.length} 条消息（可能已从内存里淘汰）`,
+      );
+      setTimeout(() => setFeedback(null), 5000);
+    } catch (e) {
+      setFeedback(`失败：${(e as Error).message}`);
+      setTimeout(() => setFeedback(null), 5000);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (feedback) {
+    return <span className="text-xs text-amber-400">{feedback}</span>;
+  }
+
+  return (
+    <button
+      onClick={() => void handleClick()}
+      disabled={busy}
+      className="ml-auto rounded-md border border-border bg-card px-2 py-0.5 text-xs text-muted-foreground opacity-0 transition-all hover:border-primary/50 hover:bg-primary/10 hover:text-primary group-hover/replay:opacity-100 disabled:opacity-50"
+      title={`重放这 ${messageIds.length} 条消息走解析管线`}
+    >
+      {busy ? "注入中…" : `↻ 重放${messageIds.length > 1 ? ` (${messageIds.length})` : ""}`}
+    </button>
+  );
 }
 
 function AuthorAvatar({ authorId, displayName, kol, size = 36 }: {
@@ -265,7 +311,7 @@ export default function MessagesPage() {
           const kol = kolMap.get(group.authorId);
           const displayName = kol?.label ?? group.author;
           return (
-            <div key={gi} className="mt-5 first:mt-0">
+            <div key={gi} className="group/replay mt-5 first:mt-0">
               <div className="flex items-start gap-3">
                 <AuthorAvatar authorId={group.authorId} displayName={displayName} kol={kol} size={36} />
                 <div className="min-w-0 flex-1">
@@ -277,6 +323,7 @@ export default function MessagesPage() {
                         {channelMap.get(group.messages[0].channelId)?.label ?? group.messages[0].channelId}
                       </span>
                     )}
+                    <ReplayButton messageIds={group.messages.map((m) => m.messageId)} />
                   </div>
 
                   {group.messages.map((msg) => (

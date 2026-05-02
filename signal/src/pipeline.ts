@@ -59,7 +59,18 @@ export interface SignalPipeline {
   /** Forward a Discord message into the parsing pipeline. */
   handleDiscordMessage(msg: RawDiscordMessage): Promise<void>
 
-  /** Flush in-flight bundles. Call on graceful shutdown. */
+  /**
+   * Force-close every open aggregator window immediately, dispatching their
+   * bundles through the parser → router chain. Used by the "replay this
+   * message" dev tool so the operator doesn't have to wait the full
+   * idleTimeoutMs (30s) to see results. Returns when all dispatches finish.
+   *
+   * Unlike shutdown(), this leaves the EventLog handle and KolRegistry
+   * watcher running — the pipeline keeps accepting new messages.
+   */
+  flush(): Promise<void>
+
+  /** Flush in-flight bundles AND release all resources. SIGINT/SIGTERM only. */
   shutdown(): Promise<void>
 }
 
@@ -264,6 +275,11 @@ export async function createPipeline(deps: PipelineDeps = {}): Promise<SignalPip
           'Pipeline: handleDiscordMessage failed',
         )
       }
+    },
+
+    async flush(): Promise<void> {
+      logger.info('Pipeline: forced flush requested')
+      await aggregator.flushAll()
     },
 
     async shutdown(): Promise<void> {

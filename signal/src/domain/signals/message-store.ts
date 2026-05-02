@@ -40,6 +40,15 @@ export class MessageStore {
     return msgs.slice(-limit)
   }
 
+  /**
+   * Look up a message by Discord snowflake. Searches the in-memory tail
+   * (up to MAX_MEMORY entries); for older messages the caller would need
+   * to read messages.jsonl directly. Returns null when not found.
+   */
+  findById(messageId: string): RawDiscordMessage | null {
+    return this.messages.find((m) => m.messageId === messageId) ?? null
+  }
+
   distinctChannels(): string[] {
     return [...new Set(this.messages.map((m) => m.channelId))]
   }

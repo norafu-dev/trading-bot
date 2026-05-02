@@ -74,8 +74,15 @@ export const positionUpdateExtractSchema = z.object({
    * Which TP level was hit.
    * Only meaningful when `updateType === 'tp_hit'`.
    * 1 = TP1, 2 = TP2, etc.
+   *
+   * Refine — Anthropic via OpenRouter rejects JSON Schemas with
+   * `{ type: 'integer', minimum: ... }`; the constraint still runs in Zod.
    */
-  level: z.number().int().min(1).optional(),
+  level: z
+    .number()
+    .int()
+    .refine((n) => n >= 1, { message: 'level must be ≥ 1' })
+    .optional(),
 
   /**
    * Percentage of the position that was closed in this update.
@@ -112,8 +119,11 @@ export const positionUpdateExtractSchema = z.object({
   /**
    * LLM's self-assessed confidence in this extraction [0, 1].
    * RegexParser always sets 1.0.
+   * Refine — Anthropic via OpenRouter rejects number minimum/maximum.
    */
-  confidence: z.number().min(0).max(1),
+  confidence: z
+    .number()
+    .refine((n) => n >= 0 && n <= 1, { message: 'confidence must be in [0, 1]' }),
 
   // NOTE: `extractedFrom` is intentionally NOT in this schema — see
   // signal-schema.ts for the rationale.
@@ -122,8 +132,12 @@ export const positionUpdateExtractSchema = z.object({
    * LLM chain-of-thought reasoning.
    * Stored for prompt-engineering audits only; never displayed to end users.
    * Min 20 chars to keep audit logs useful for prompt iteration.
+   * Refine — string minLength rejected by some providers via OpenRouter.
    */
-  reasoning: z.string().min(20).optional(),
+  reasoning: z
+    .string()
+    .refine((s) => s.length >= 20, { message: 'reasoning must be at least 20 chars' })
+    .optional(),
 })
 
 /** TypeScript type inferred from `positionUpdateExtractSchema`. */

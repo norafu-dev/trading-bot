@@ -30,8 +30,9 @@ export const signalExtractSchema = z.object({
    * Raw symbol exactly as the KOL wrote it.
    * Examples: "BTC", "HYPE", "GENIUS", "ASTEROIOD", "HUSDT".
    * The broker layer is responsible for CCXT normalisation and typo mapping.
+   * Refine — string minLength may also be rejected by some providers.
    */
-  symbol: z.string().min(1),
+  symbol: z.string().refine((s) => s.length >= 1, { message: 'symbol must not be empty' }),
 
   /** 'spot' for non-margin spot trades; 'perpetual' for futures/perps. */
   contractType: z.enum(['perpetual', 'spot']).optional(),
@@ -76,8 +77,13 @@ export const signalExtractSchema = z.object({
   takeProfits: z
     .array(
       z.object({
-        /** 1-based level index. TP1 = 1, TP2 = 2, etc. */
-        level: z.number().int().min(1),
+        /**
+         * 1-based level index. TP1 = 1, TP2 = 2, etc.
+         * Refine instead of `.min(1)` because Anthropic models (via OpenRouter)
+         * reject JSON Schemas with `{ type: 'integer', minimum: ... }`.
+         * The constraint still runs at Zod parse time on the LLM's output.
+         */
+        level: z.number().int().refine((n) => n >= 1, { message: 'level must be ≥ 1' }),
         price: z.string(),
       }),
     )
@@ -95,15 +101,27 @@ export const signalExtractSchema = z.object({
     })
     .optional(),
 
-  /** Leverage multiplier (1 = no leverage / spot). */
-  leverage: z.number().int().min(1).optional(),
+  /**
+   * Leverage multiplier (1 = no leverage / spot).
+   * Refine — see `level` above for why .min(1) won't work via OpenRouter+Anthropic.
+   */
+  leverage: z
+    .number()
+    .int()
+    .refine((n) => n >= 1, { message: 'leverage must be ≥ 1' })
+    .optional(),
 
   /**
    * LLM's self-assessed confidence in this extraction [0, 1].
    * RegexParser always sets 1.0 (deterministic match).
    * Values below the configured threshold cause the result to be discarded.
+   *
+   * Refine — Anthropic via OpenRouter rejects JSON Schemas with
+   * `{ type: 'number', minimum, maximum }`. Constraint still runs in Zod.
    */
-  confidence: z.number().min(0).max(1),
+  confidence: z
+    .number()
+    .refine((n) => n >= 0 && n <= 1, { message: 'confidence must be in [0, 1]' }),
 
   // NOTE: `extractedFrom` is intentionally NOT in this schema.
   // The provider declares which modalities it sent (via ExtractInput.extractedFrom);
@@ -133,8 +151,12 @@ export const signalExtractSchema = z.object({
    * LLM chain-of-thought reasoning that produced this extraction.
    * Stored for prompt-engineering audits only; never displayed to end users.
    * Min 20 chars: a one-word "ok" reasoning is useless for prompt iteration.
+   * Refine — string minLength rejected by some providers via OpenRouter.
    */
-  reasoning: z.string().min(20).optional(),
+  reasoning: z
+    .string()
+    .refine((s) => s.length >= 20, { message: 'reasoning must be at least 20 chars' })
+    .optional(),
 })
 
 /** TypeScript type inferred from `signalExtractSchema`. */
