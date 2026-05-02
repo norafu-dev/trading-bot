@@ -19,6 +19,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { z } from 'zod'
 import { PATHS } from './paths.js'
+import { readSecrets, writeSecrets } from './secrets-store.js'
 
 // ── Schema (full, with secret) ──────────────────────────────────────────────
 
@@ -82,12 +83,18 @@ const LLM_CONFIG_FILE = join(PATHS.configDir, 'llm.json')
 /**
  * Load LLM config: file → env → defaults.
  *
+ * The non-secret parts (model names, base URL, threshold) live in
+ * `data/config/llm.json`; the apiKey lives in `data/config/secrets.json`
+ * under `openrouter.apiKey`. We merge them transparently here so callers
+ * see one config object — they don't need to know about the split.
+ *
  * Never throws on missing file. Throws only if the file exists but fails
  * schema validation — that's a config bug worth surfacing immediately
  * rather than silently using defaults.
  */
 export async function loadLlmConfig(): Promise<LlmConfig> {
-  // 1. Try the file
+  // 1. Read the (non-secret) file
+  let baseConfig: LlmConfig | null = null
   try {
     const raw = await readFile(LLM_CONFIG_FILE, 'utf-8')
     const parsed = llmConfigSchema.safeParse(JSON.parse(raw))
@@ -96,28 +103,54 @@ export async function loadLlmConfig(): Promise<LlmConfig> {
         `LLM config at ${LLM_CONFIG_FILE} is malformed: ${parsed.error.message}`,
       )
     }
-    return parsed.data
+    baseConfig = parsed.data
   } catch (err) {
     if (!isENOENT(err)) throw err
   }
 
-  // 2. Fall back to env vars
-  const fromEnv = llmConfigSchema.parse({
-    apiKey: process.env['OPENROUTER_API_KEY'] ?? '',
+  // 2. Read the secret. Wins over both file and env when present.
+  const secrets = await readSecrets()
+  const secretApiKey = secrets.openrouter?.apiKey ?? ''
+
+  if (baseConfig) {
+    // File present — overlay the secret if any.
+    return {
+      ...baseConfig,
+      apiKey: secretApiKey || baseConfig.apiKey,
+    }
+  }
+
+  // 3. No file — fall back to env vars
+  return llmConfigSchema.parse({
+    apiKey: secretApiKey || process.env['OPENROUTER_API_KEY'] || '',
     ...(process.env['OPENROUTER_BASE_URL'] && { baseUrl: process.env['OPENROUTER_BASE_URL'] }),
     ...(process.env['OPENROUTER_CLASSIFY_MODEL'] && { classifyModel: process.env['OPENROUTER_CLASSIFY_MODEL'] }),
     ...(process.env['OPENROUTER_EXTRACT_MODEL'] && { extractModel: process.env['OPENROUTER_EXTRACT_MODEL'] }),
   })
-  return fromEnv
 }
 
 /**
- * Persist the full config (including apiKey) to disk.
- * Creates the parent directory if missing.
+ * Persist config to disk, splitting the secret from the non-secret part:
+ *   - apiKey  → `data/config/secrets.json` under `openrouter.apiKey`
+ *   - rest    → `data/config/llm.json` (apiKey field always emptied)
+ *
+ * After this call, llm.json never contains a plaintext apiKey, even if
+ * it did before. Idempotent.
  */
 export async function saveLlmConfig(cfg: LlmConfig): Promise<void> {
   await mkdir(dirname(LLM_CONFIG_FILE), { recursive: true })
-  await writeFile(LLM_CONFIG_FILE, JSON.stringify(cfg, null, 2) + '\n', 'utf-8')
+
+  // Split off the secret first
+  const existingSecrets = await readSecrets()
+  const updatedSecrets = {
+    ...existingSecrets,
+    openrouter: { apiKey: cfg.apiKey },
+  }
+  await writeSecrets(updatedSecrets)
+
+  // Write the public portion with apiKey blanked
+  const publicConfig: LlmConfig = { ...cfg, apiKey: '' }
+  await writeFile(LLM_CONFIG_FILE, JSON.stringify(publicConfig, null, 2) + '\n', 'utf-8')
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
