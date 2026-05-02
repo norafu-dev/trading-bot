@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { llmConfigApi } from "@/lib/api";
+import { llmConfigApi, riskConfigApi } from "@/lib/api";
 import type { LlmTestResult, PublicLlmConfig } from "@/lib/api";
+import type { RiskConfig } from "@shared/types";
 
 // ==================== Page ====================
 
@@ -75,6 +76,7 @@ export default function SettingsPage() {
             }}
           />
         )}
+        <RiskConfigCard />
       </div>
     </div>
   );
@@ -317,6 +319,170 @@ function LlmConfigCard({
             className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary-hover disabled:opacity-50"
           >
             {saving ? "保存中…" : "保存配置"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ==================== Risk Config Card ====================
+
+/**
+ * Position-sizing + guard knobs for the copy-trading engine. Edits here
+ * apply to the NEXT signal — no restart required (engine reads
+ * `loadRiskConfig` per operation).
+ */
+function RiskConfigCard() {
+  const [config, setConfig] = useState<RiskConfig | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      setConfig(await riskConfigApi.get());
+      setError(null);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, []);
+
+  useEffect(() => { void refresh(); }, [refresh]);
+
+  if (!config) {
+    return (
+      <div className="rounded-xl border border-border bg-card p-6 text-sm text-muted-foreground">
+        {error ?? "加载风控配置中…"}
+      </div>
+    );
+  }
+
+  return (
+    <Inner config={config} onChange={setConfig} onError={setError} saving={saving} setSaving={setSaving} savedAt={savedAt} setSavedAt={setSavedAt} />
+  );
+}
+
+function Inner({
+  config, onChange, onError, saving, setSaving, savedAt, setSavedAt,
+}: {
+  config: RiskConfig;
+  onChange: (c: RiskConfig) => void;
+  onError: (s: string | null) => void;
+  saving: boolean;
+  setSaving: (b: boolean) => void;
+  savedAt: number | null;
+  setSavedAt: (n: number) => void;
+}) {
+  const [base, setBase] = useState(String(config.baseRiskPercent));
+  const [maxOp, setMaxOp] = useState(String(config.maxOperationSizePercent));
+  const [whitelist, setWhitelist] = useState(config.symbolWhitelist.join(", "));
+  const [cooldown, setCooldown] = useState(String(config.cooldownMinutes));
+
+  const dirty =
+    Number(base) !== config.baseRiskPercent ||
+    Number(maxOp) !== config.maxOperationSizePercent ||
+    Number(cooldown) !== config.cooldownMinutes ||
+    whitelist !== config.symbolWhitelist.join(", ");
+
+  async function handleSave() {
+    onError(null);
+    setSaving(true);
+    try {
+      const updated = await riskConfigApi.update({
+        baseRiskPercent: Number(base),
+        maxOperationSizePercent: Number(maxOp),
+        symbolWhitelist: whitelist.split(",").map((s) => s.trim()).filter(Boolean),
+        cooldownMinutes: Number(cooldown),
+      });
+      onChange(updated);
+      setSavedAt(Date.now());
+    } catch (e) {
+      onError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="rounded-xl border border-border bg-card p-6 shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h2 className="text-base font-semibold text-foreground">风险与守卫</h2>
+          <p className="mt-1 text-xs text-muted-foreground">
+            操作仓位大小 + 全局守卫规则。改动落盘到{" "}
+            <code className="rounded bg-muted px-1 py-0.5 font-mono">data/config/risk.json</code>
+            ，下一条信号立即生效（不需要重启）。
+          </p>
+        </div>
+        {savedAt && Date.now() - savedAt < 4000 && (
+          <span className="shrink-0 rounded-md border border-green-500/30 bg-green-500/10 px-2 py-1 text-[10px] text-green-400">
+            ✓ 已保存
+          </span>
+        )}
+      </div>
+
+      <div className="mt-5 space-y-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div>
+            <label className={labelClass}>基础风险 % (每信号)</label>
+            <input
+              type="number" step="0.1" min="0" max="100"
+              className={inputClass}
+              value={base}
+              onChange={(e) => setBase(e.target.value)}
+            />
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              名义仓位 = 权益 × 此 % × KOL 风险倍数 × 信号置信度
+            </p>
+          </div>
+          <div>
+            <label className={labelClass}>单次操作上限 % (硬封顶)</label>
+            <input
+              type="number" step="0.1" min="0" max="100"
+              className={inputClass}
+              value={maxOp}
+              onChange={(e) => setMaxOp(e.target.value)}
+            />
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              即使 KOL 倍数+置信度乘积超过此值也会被封顶
+            </p>
+          </div>
+        </div>
+
+        <div>
+          <label className={labelClass}>Symbol 白名单（逗号分隔，留空=全部允许）</label>
+          <input
+            className={inputClass}
+            value={whitelist}
+            onChange={(e) => setWhitelist(e.target.value)}
+            placeholder="如 BTC, ETH, SOL"
+          />
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            归一化匹配 — &quot;BTC&quot; 同时匹配 BTC/USDT / BTCUSDT / BTC/USDT:USDT
+          </p>
+        </div>
+
+        <div className="max-w-xs">
+          <label className={labelClass}>冷却时间（分钟）</label>
+          <input
+            type="number" step="1" min="0"
+            className={inputClass}
+            value={cooldown}
+            onChange={(e) => setCooldown(e.target.value)}
+          />
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            同 KOL 同 symbol 两次操作的最小间隔
+          </p>
+        </div>
+
+        <div className="flex justify-end pt-2">
+          <button
+            onClick={() => void handleSave()}
+            disabled={!dirty || saving}
+            className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary-hover disabled:opacity-50"
+          >
+            {saving ? "保存中…" : "保存风控"}
           </button>
         </div>
       </div>

@@ -9,6 +9,8 @@ import type {
   TradePosition,
   Signal,
   PositionUpdate,
+  Operation,
+  RiskConfig,
 } from "../../shared/types";
 
 // ==================== Generic fetch wrapper ====================
@@ -342,4 +344,34 @@ export const pipelineApi = {
       body: JSON.stringify({ messageIds }),
     }),
   flush: () => api<{ ok: boolean }>("/pipeline/flush", { method: "POST" }),
+};
+
+// ==================== Operations API ====================
+
+export interface OperationListResult {
+  operations: Operation[];
+  total: number;
+  limit: number;
+}
+
+export const operationApi = {
+  list: (params?: { limit?: number; kolId?: string; status?: Operation["status"] }) => {
+    const search = new URLSearchParams();
+    if (params?.limit) search.set("limit", String(params.limit));
+    if (params?.kolId) search.set("kolId", params.kolId);
+    if (params?.status) search.set("status", params.status);
+    const qs = search.toString();
+    return api<OperationListResult>(`/operations${qs ? `?${qs}` : ""}`);
+  },
+};
+
+// ==================== Risk Config API ====================
+
+export const riskConfigApi = {
+  get: () => api<RiskConfig>("/config/risk"),
+  update: (data: Partial<RiskConfig>) =>
+    api<RiskConfig>("/config/risk", {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
 };

@@ -1,3 +1,4 @@
+import type { Signal } from '../../../../../shared/types.js'
 import type { EventLog } from '../../../core/event-log.js'
 import { logger } from '../../../core/logger.js'
 import type { ISignalIndex } from '../linking/types.js'
@@ -69,12 +70,22 @@ export interface ParseFailedEvent {
  * crash-replay produces an index identical to the one held in memory at
  * crash time.
  */
+/**
+ * Optional copy-trading hook called after a Signal is persisted +
+ * indexed. ResultRouter doesn't depend on the engine's full surface —
+ * just a single async fn — so the trading layer can be wired in or
+ * left out (tests, dev mode without a CCXT account) without touching
+ * this file.
+ */
+export type CopyTradingHook = (signal: Signal) => Promise<void>
+
 export class ResultRouter {
   constructor(
     private readonly store: ISignalStore,
     private readonly linker: UpdateLinker,
     private readonly index: ISignalIndex,
     private readonly events: EventLog,
+    private readonly copyTradingHook?: CopyTradingHook,
   ) {}
 
   async route(result: ParseResult): Promise<void> {
@@ -116,6 +127,20 @@ export class ResultRouter {
       parserType: signal.parserType,
       confidence: signal.confidence,
     })
+
+    // Hand off to copy-trading engine. Failures here must NEVER block
+    // the signal pipeline — a sizing error is downstream from "we
+    // successfully parsed this signal".
+    if (this.copyTradingHook) {
+      try {
+        await this.copyTradingHook(signal)
+      } catch (err) {
+        logger.error(
+          { err, signalId: signal.id, kolId: signal.kolId },
+          'ResultRouter: copy-trading hook threw — signal still persisted',
+        )
+      }
+    }
   }
 
   private async handleUpdate(result: Extract<ParseResult, { kind: 'update' }>): Promise<void> {

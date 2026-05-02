@@ -453,3 +453,149 @@ export interface PositionUpdate {
   /** LLM chain-of-thought. Stored for prompt-engineering audits only. */
   reasoning?: string
 }
+
+// ── Operation ─────────────────────────────────────────────────────────────────
+
+/**
+ * A trade-intent record produced by the copy-trading engine after sizing
+ * and guard-checking a `Signal`. Lives on disk in `data/operations/operations.jsonl`
+ * and represents the bridge between "what a KOL said" and "what the bot
+ * intends to do". It's distinct from the eventual broker order — that
+ * comes after approval (Phase 5).
+ *
+ * Status lifecycle:
+ *   pending  → awaiting human approval (default after engine produces it)
+ *   approved → human said go; broker order will follow (Phase 5)
+ *   rejected → either a guard rejected it OR a human declined approval
+ *   executed → broker confirmed the order
+ *   failed   → broker rejected (network / margin / price / permission)
+ *
+ * All numeric values are Decimal strings — never plain JS numbers.
+ */
+export interface Operation {
+  /** ULID, monotonic — stable primary key. */
+  id: string
+
+  /** Source signal — every operation traces back to one. */
+  signalId: string
+  /** Convenience copy of the originating KOL (matches signal.kolId). */
+  kolId: string
+
+  /** Trading account this operation targets. References TradingAccountConfig.id. */
+  accountId: string
+
+  status: 'pending' | 'approved' | 'rejected' | 'executed' | 'failed'
+
+  /** ISO 8601 — when the engine produced this operation. */
+  createdAt: string
+
+  /**
+   * Per-guard verdicts in the order they ran. When a guard rejects, the
+   * pipeline short-circuits — but everything that ran is recorded. Used
+   * by the dashboard to explain why a signal was/wasn't approved.
+   */
+  guardResults: Array<{ name: string; passed: boolean; reason?: string }>
+
+  /**
+   * Set when status === 'rejected' and the rejection came from a guard
+   * (rather than from a human). Empty / undefined for non-rejected
+   * statuses or human rejections.
+   */
+  guardRejection?: { guardName: string; reason: string }
+
+  /** The broker-agnostic intent. See `OperationSpec` discriminant. */
+  spec: OperationSpec
+
+  /**
+   * Account snapshot used at sizing time, captured for audit. Lets the
+   * dashboard show "this operation was sized assuming equity = X" even
+   * if the account moves before approval.
+   */
+  sizingContext?: {
+    /** Net liquidation at decision time, decimal string. */
+    equity: string
+    /** Effective base risk % (after KOL multiplier and signal confidence). */
+    effectiveRiskPercent: string
+  }
+}
+
+/**
+ * The actual broker-side intent. Discriminated on `action`. Open trades
+ * carry full TP/SL plumbing so a single operation maps to a complete
+ * "open position with TPs and SL" group on the exchange.
+ *
+ * Currently we only emit `placeOrder` from sizing — `closePosition` /
+ * `modifyOrder` are reserved for handling `PositionUpdate` entries in
+ * a future iteration.
+ */
+export type OperationSpec =
+  | {
+      action: 'placeOrder'
+      symbol: string
+      side: 'long' | 'short'
+      contractType: 'perpetual' | 'spot'
+      orderType: 'market' | 'limit'
+      /** Limit price (decimal string). Absent for market orders. */
+      price?: string
+      /**
+       * Position sizing — discriminated on `unit`:
+       *   'percent'   = % of account equity at decision time
+       *   'absolute'  = quote-currency notional (e.g. "500" USDT)
+       *   'contracts' = exchange-native contract count
+       * The position sizer typically emits 'absolute' so size is fixed
+       * once the operation is created, immune to subsequent equity drift.
+       */
+      size: {
+        unit: 'percent' | 'absolute' | 'contracts'
+        value: string
+      }
+      leverage?: number
+      stopLoss?: { price: string }
+      takeProfits?: Array<{ level: number; price: string }>
+    }
+  | {
+      action: 'closePosition'
+      symbol: string
+      side: 'long' | 'short'
+      /** Decimal string. Absent → close entire position. */
+      quantity?: string
+    }
+  | {
+      action: 'modifyOrder'
+      brokerOrderId: string
+      changes: { price?: string; stopLossPrice?: string }
+    }
+
+// ── Risk config ───────────────────────────────────────────────────────────────
+
+/**
+ * Global risk knobs, edited in the dashboard, persisted to
+ * `data/config/risk.json`. Per-KOL adjustments live on `KolConfig`
+ * (riskMultiplier, maxOpenPositions); this is the global baseline they
+ * scale.
+ */
+export interface RiskConfig {
+  /**
+   * Base position size as a % of account equity (NOT a fraction).
+   * "1" = 1% of equity. Multiplied by the KOL's riskMultiplier and the
+   * signal's confidence to produce the actual sized notional.
+   */
+  baseRiskPercent: number
+
+  /**
+   * Hard ceiling on a single operation's size as a % of equity.
+   * Caps any combination of (kol multiplier × signal confidence) that
+   * would otherwise overshoot.
+   */
+  maxOperationSizePercent: number
+
+  /**
+   * Symbol whitelist. When non-empty, only signals whose symbol matches
+   * (case-insensitive, ignoring quote suffix) are eligible. Empty = no
+   * whitelist enforced.
+   */
+  symbolWhitelist: string[]
+
+  /** Cooldown — minutes between two same-(kol, symbol) operations. */
+  cooldownMinutes: number
+}

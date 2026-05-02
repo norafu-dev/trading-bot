@@ -48,6 +48,11 @@ import type { ILlmProvider, ISessionLogger } from './domain/signals/parsing/type
 import { SignalIndexBuilder } from './domain/signals/persistence/signal-index-builder.js'
 import { SignalStore } from './domain/signals/persistence/signal-store.js'
 import { ResultRouter } from './domain/signals/routing/result-router.js'
+import { CopyTradingEngine } from './domain/copy-trading/engine.js'
+import { OperationStore } from './domain/copy-trading/operation-store.js'
+import { SnapshotService } from './domain/copy-trading/snapshot-service.js'
+import { DEFAULT_GUARD_CONFIGS, resolveGuards } from './domain/copy-trading/guards/registry.js'
+import { readTradingAccountsConfig } from './domain/trading/config-store.js'
 
 // ── Aggregator defaults — override per-KOL via kols.json aggregatorOverrides ─
 
@@ -187,14 +192,40 @@ export async function createPipeline(deps: PipelineDeps = {}): Promise<SignalPip
     logger.info('Pipeline: skipping LLM health-check (no provider)')
   }
 
-  // ── 7. Result router (linker + index + store + events)
+  // ── 7. Copy-trading engine (sizer + guards + operation store + snapshot)
+  // Wired BEFORE the router so the router can hold a reference to the
+  // engine's `process` method as its copy-trading hook.
+  const operationStore = new OperationStore(PATHS.operationsLog)
+  const snapshotService = new SnapshotService(readTradingAccountsConfig)
+  snapshotService.start()
+
+  const guards = resolveGuards(DEFAULT_GUARD_CONFIGS)
+  const engine = new CopyTradingEngine({
+    listAccounts: readTradingAccountsConfig,
+    snapshots: snapshotService,
+    store: operationStore,
+    events: eventLog,
+    guards,
+    guardStateFile: PATHS.guardStateFile,
+  })
+  await engine.loadGuardState()
+  logger.info(
+    { guards: guards.map((g) => g.name) },
+    'Pipeline: copy-trading engine ready',
+  )
+
+  // ── 8. Result router (linker + index + store + events + copy-trading hook)
   const linker = new UpdateLinker([
     new ByExternalIdStrategy(),
     new ByKolSymbolStrategy(),
   ])
-  const router = new ResultRouter(signalStore, linker, signalIndex, eventLog)
+  const router = new ResultRouter(signalStore, linker, signalIndex, eventLog, async (signal) => {
+    const kol = kolRegistry.get(signal.kolId)
+    if (!kol) return  // shouldn't happen — author filter ran before — but be safe
+    await engine.process(signal, kol)
+  })
 
-  // ── 8. Aggregator: bundle close → dispatcher → router
+  // ── 9. Aggregator: bundle close → dispatcher → router
   const aggregator = new MessageAggregator({
     idleTimeoutMs: DEFAULT_IDLE_TIMEOUT_MS,
     maxDurationMs: DEFAULT_MAX_DURATION_MS,
@@ -255,7 +286,7 @@ export async function createPipeline(deps: PipelineDeps = {}): Promise<SignalPip
     )
   })
 
-  // ── 9. Pre-pipeline (filters)
+  // ── 10. Pre-pipeline (filters)
   const prePipeline = createDefaultPrePipeline()
   // Rolling cache of recently-seen messageIds, owned here per the
   // FilterContext contract (the duplicate filter reads, the orchestrator
@@ -273,7 +304,7 @@ export async function createPipeline(deps: PipelineDeps = {}): Promise<SignalPip
     }
   }
 
-  // ── 10. The handler exposed back to main.ts
+  // ── 11. The handler exposed back to main.ts
   return {
     async handleDiscordMessage(msg: RawDiscordMessage): Promise<void> {
       try {
@@ -311,6 +342,7 @@ export async function createPipeline(deps: PipelineDeps = {}): Promise<SignalPip
     async shutdown(): Promise<void> {
       logger.info('Pipeline: flushing in-flight bundles…')
       await aggregator.flushAll()
+      await snapshotService.stop()
       await eventLog.close()
       kolRegistry.close()
     },

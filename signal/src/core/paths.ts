@@ -45,6 +45,12 @@ export const PATHS = {
   /** Parsed signal records. */
   signalsLog: join(DATA_ROOT, 'signals', 'signals.jsonl'),
 
+  /** Copy-trading Operation records (sizer + guards output, awaiting approval). */
+  operationsLog: join(DATA_ROOT, 'operations', 'operations.jsonl'),
+
+  /** Persistent state for stateful guards (currently just CooldownGuard). */
+  guardStateFile: join(DATA_ROOT, 'operations', 'guard-state.json'),
+
   /** KOL registry JSON. */
   kolsFile: join(DATA_ROOT, 'kols', 'kols.json'),
 
