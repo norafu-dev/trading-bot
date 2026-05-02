@@ -4,17 +4,18 @@ import { logger } from '../../core/logger.js'
 import type { Operation } from '../../../../shared/types.js'
 
 /**
- * Append-only JSONL store for `Operation` records.
+ * Append-only JSONL store for `Operation` records and their status changes.
  *
  * Design follows the SignalStore pattern (Batch 6):
  *   - one line per record
  *   - chronological insertion order = reliable replay
  *   - never delete or rewrite existing lines
  *
- * Status changes (pending → approved → executed) will be appended as
- * NEW records rather than mutating the original — Phase 5 / 6 will add
- * a `kind: 'status-change'` event variant. For now we only emit
- * `kind: 'operation'` records.
+ * Status transitions (pending → approved → rejected → executed) are
+ * appended as `kind: 'status-change'` events rather than mutating the
+ * original `kind: 'operation'` record. The read path folds them back
+ * onto the operation so callers see the latest status without knowing
+ * about the event-sourcing layer underneath.
  */
 
 export interface OperationStoreRecord {
@@ -22,39 +23,64 @@ export interface OperationStoreRecord {
   record: Operation
 }
 
+/**
+ * Status-transition event. Appended every time `PUT /api/operations/:id/status`
+ * (or, in the future, the broker push path) flips an operation's status.
+ * `by` distinguishes dashboard / telegram / engine origin so the audit
+ * trail is unambiguous.
+ */
+export interface OperationStatusChangeRecord {
+  kind: 'status-change'
+  /** Operation.id this change targets. */
+  operationId: string
+  /** New status — replaces the operation's current status. */
+  newStatus: Operation['status']
+  /** ISO 8601 — when the change happened. */
+  at: string
+  /** Origin of the change. 'dashboard' / 'telegram' / 'engine' / 'broker'. */
+  by: 'dashboard' | 'telegram' | 'engine' | 'broker'
+  /** Optional human reason — typically present on manual rejects. */
+  reason?: string
+}
+
+export type StoreLine = OperationStoreRecord | OperationStatusChangeRecord
+
 export interface IOperationStore {
   append(operation: Operation): Promise<void>
   /**
-   * Replay everything in insertion (chronological) order. Used by the
-   * read-only `/api/operations` route and (in Phase 5) by the engine
-   * to rebuild the in-memory pending set on boot.
+   * Persist a status transition event. The operation record itself
+   * remains immutable on disk; consumers fold these events when reading.
    */
-  replay(): AsyncIterable<OperationStoreRecord>
+  appendStatusChange(change: Omit<OperationStatusChangeRecord, 'kind'>): Promise<void>
   /**
-   * Convenience: read all into an array. Tests + small read-paths use
-   * this; production hot paths should use `replay()`.
+   * Replay everything in insertion (chronological) order. Yields a mix
+   * of `kind: 'operation'` and `kind: 'status-change'` records — useful
+   * when you need the full audit trail. Most consumers want
+   * `readAllOperations()` instead.
    */
-  readAll(): Promise<OperationStoreRecord[]>
+  replay(): AsyncIterable<StoreLine>
+  /**
+   * Read every operation, applying status-change events in order so
+   * each returned operation reflects its CURRENT status. Pure read —
+   * no rewriting, no delete.
+   */
+  readAllOperations(): Promise<Operation[]>
 }
 
 export class OperationStore implements IOperationStore {
   constructor(private readonly path: string) {}
 
   async append(operation: Operation): Promise<void> {
-    try {
-      await mkdir(dirname(this.path), { recursive: true })
-      const line = JSON.stringify({ kind: 'operation', record: operation } satisfies OperationStoreRecord)
-      await appendFile(this.path, line + '\n', 'utf-8')
-    } catch (err) {
-      logger.error(
-        { err, path: this.path, operationId: operation.id, kolId: operation.kolId },
-        'OperationStore.append failed — record was NOT persisted',
-      )
-      throw err
-    }
+    await this.write({ kind: 'operation', record: operation })
   }
 
-  async *replay(): AsyncIterable<OperationStoreRecord> {
+  async appendStatusChange(
+    change: Omit<OperationStatusChangeRecord, 'kind'>,
+  ): Promise<void> {
+    await this.write({ kind: 'status-change', ...change })
+  }
+
+  async *replay(): AsyncIterable<StoreLine> {
     let raw: string
     try {
       raw = await readFile(this.path, 'utf-8')
@@ -68,8 +94,8 @@ export class OperationStore implements IOperationStore {
       line++
       if (!text.trim()) continue
       try {
-        const parsed = JSON.parse(text) as OperationStoreRecord
-        if (parsed.kind !== 'operation') {
+        const parsed = JSON.parse(text) as StoreLine
+        if (parsed.kind !== 'operation' && parsed.kind !== 'status-change') {
           logger.warn(
             { path: this.path, line, kind: (parsed as { kind?: unknown }).kind },
             'OperationStore.replay: unknown record kind, skipping',
@@ -86,10 +112,44 @@ export class OperationStore implements IOperationStore {
     }
   }
 
-  async readAll(): Promise<OperationStoreRecord[]> {
-    const out: OperationStoreRecord[] = []
-    for await (const r of this.replay()) out.push(r)
-    return out
+  /**
+   * Fold all status-change events onto their operations and return the
+   * latest view. Insertion order is preserved (creation chronology),
+   * but each operation reflects its CURRENT status.
+   */
+  async readAllOperations(): Promise<Operation[]> {
+    const byId = new Map<string, Operation>()
+    const order: string[] = []
+    for await (const line of this.replay()) {
+      if (line.kind === 'operation') {
+        const op = line.record
+        if (!byId.has(op.id)) order.push(op.id)
+        byId.set(op.id, { ...op })
+        continue
+      }
+      // status-change
+      const op = byId.get(line.operationId)
+      if (!op) {
+        // Status change for an unknown operation — possible if the file
+        // was hand-edited or partially restored. Skip rather than crash.
+        continue
+      }
+      op.status = line.newStatus
+    }
+    return order.map((id) => byId.get(id)!).filter(Boolean)
+  }
+
+  private async write(line: StoreLine): Promise<void> {
+    try {
+      await mkdir(dirname(this.path), { recursive: true })
+      await appendFile(this.path, JSON.stringify(line) + '\n', 'utf-8')
+    } catch (err) {
+      logger.error(
+        { err, path: this.path, kind: line.kind },
+        'OperationStore.write failed — record was NOT persisted',
+      )
+      throw err
+    }
   }
 }
 

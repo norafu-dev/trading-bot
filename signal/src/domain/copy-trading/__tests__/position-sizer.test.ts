@@ -127,4 +127,60 @@ describe('PositionSizer', () => {
     })
     expect(op.guardResults).toEqual([])
   })
+
+  it('normalises a Chinese symbol to the CCXT shape', () => {
+    const op = sizer.size({
+      signal: makeSignal({ symbol: '比特币', contractType: 'perpetual' }),
+      kol: makeKol(),
+      account: makeAccount(),
+      riskConfig: DEFAULT_RISK,
+    })
+    if (op.spec.action !== 'placeOrder') throw new Error()
+    expect(op.spec.symbol).toBe('BTC/USDT:USDT')
+  })
+
+  it('normalises a $-decorated bare symbol', () => {
+    const op = sizer.size({
+      signal: makeSignal({ symbol: '$HYPE', contractType: 'perpetual' }),
+      kol: makeKol(),
+      account: makeAccount(),
+      riskConfig: DEFAULT_RISK,
+    })
+    if (op.spec.action !== 'placeOrder') throw new Error()
+    expect(op.spec.symbol).toBe('HYPE/USDT:USDT')
+  })
+
+  it('uses spot suffix when signal.contractType is spot', () => {
+    const op = sizer.size({
+      signal: makeSignal({ symbol: 'BTC', contractType: 'spot' }),
+      kol: makeKol(),
+      account: makeAccount(),
+      riskConfig: DEFAULT_RISK,
+    })
+    if (op.spec.action !== 'placeOrder') throw new Error()
+    expect(op.spec.symbol).toBe('BTC/USDT')
+  })
+
+  it('keeps the raw symbol when normalisation fails', () => {
+    const op = sizer.size({
+      signal: makeSignal({ symbol: '???' }),
+      kol: makeKol(),
+      account: makeAccount(),
+      riskConfig: DEFAULT_RISK,
+    })
+    if (op.spec.action !== 'placeOrder') throw new Error()
+    // Falls through to original — downstream broker error will surface
+    expect(op.spec.symbol).toBe('???')
+  })
+
+  it('respects KOL.defaultSymbolQuote (e.g. USDC)', () => {
+    const op = sizer.size({
+      signal: makeSignal({ symbol: 'BTC', contractType: 'spot' }),
+      kol: makeKol({ defaultSymbolQuote: 'USDC' }),
+      account: makeAccount(),
+      riskConfig: DEFAULT_RISK,
+    })
+    if (op.spec.action !== 'placeOrder') throw new Error()
+    expect(op.spec.symbol).toBe('BTC/USDC')
+  })
 })

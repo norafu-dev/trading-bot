@@ -85,7 +85,7 @@ app.route('/api/events', createEventRoutes())
 app.route('/api/config/llm', createLlmConfigRoutes())
 app.route('/api/pipeline', createPipelineRoutes(pipeline, messageStore))
 app.route('/api/market', createMarketRoutes(priceService))
-app.route('/api/operations', createOperationsRoutes())
+app.route('/api/operations', createOperationsRoutes(pipeline.operationStore, pipeline.eventLog))
 app.route('/api/config/risk', createRiskConfigRoutes())
 
 serve({ fetch: app.fetch, port: PORT }, (info) => {

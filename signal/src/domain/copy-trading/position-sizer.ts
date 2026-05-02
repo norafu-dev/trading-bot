@@ -1,3 +1,4 @@
+import { normalizeSymbol } from '../../connectors/market/symbol-normalize.js'
 import type {
   AccountBalance,
   KolConfig,
@@ -62,11 +63,22 @@ export class PositionSizer {
     const cappedPercent = Math.min(rawPercent, riskConfig.maxOperationSizePercent)
     const notional = (equity * cappedPercent) / 100
 
+    // Normalise the symbol to broker-ready CCXT form. `signal.symbol` is
+    // whatever the KOL wrote ("比特币", "$HYPE", "BTC/USDT") and would 404
+    // at the exchange. If the normaliser can't resolve it, fall back to
+    // the raw value — a guard / broker error downstream will make this
+    // operation visible (rejected, not silently dropped).
+    const contractType = signal.contractType ?? 'perpetual'
+    const normalised = normalizeSymbol(signal.symbol, {
+      contractType,
+      defaultQuote: kol.defaultSymbolQuote,
+    })
+
     const spec: OperationSpec = {
       action: 'placeOrder',
-      symbol: signal.symbol,
+      symbol: normalised?.ccxtSymbol ?? signal.symbol,
       side: (signal.side ?? 'long') as 'long' | 'short',
-      contractType: signal.contractType ?? 'perpetual',
+      contractType,
       orderType: signal.entry?.type ?? 'market',
       ...(signal.entry?.price !== undefined && { price: signal.entry.price }),
       size: { unit: 'absolute', value: notional.toFixed(2) },

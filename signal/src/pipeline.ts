@@ -49,6 +49,7 @@ import { SignalIndexBuilder } from './domain/signals/persistence/signal-index-bu
 import { SignalStore } from './domain/signals/persistence/signal-store.js'
 import { ResultRouter } from './domain/signals/routing/result-router.js'
 import { CopyTradingEngine } from './domain/copy-trading/engine.js'
+import type { IOperationStore } from './domain/copy-trading/operation-store.js'
 import { OperationStore } from './domain/copy-trading/operation-store.js'
 import { SnapshotService } from './domain/copy-trading/snapshot-service.js'
 import { DEFAULT_GUARD_CONFIGS, resolveGuards } from './domain/copy-trading/guards/registry.js'
@@ -78,6 +79,19 @@ export interface SignalPipeline {
 
   /** Flush in-flight bundles AND release all resources. SIGINT/SIGTERM only. */
   shutdown(): Promise<void>
+
+  /**
+   * The single OperationStore instance — exposed so HTTP routes can read /
+   * append status-changes against the same backing file the engine writes.
+   */
+  operationStore: IOperationStore
+
+  /**
+   * The single EventLog handle — exposed so HTTP routes can emit
+   * `operation.status-changed` etc. through the same dual-write log the
+   * pipeline uses.
+   */
+  eventLog: EventLog
 }
 
 /**
@@ -346,6 +360,9 @@ export async function createPipeline(deps: PipelineDeps = {}): Promise<SignalPip
       await eventLog.close()
       kolRegistry.close()
     },
+
+    operationStore,
+    eventLog,
   }
 }
 

@@ -168,14 +168,13 @@ export class CopyTradingEngine {
   }
 
   private async collectPendingForKol(kolId: string, accountId: string): Promise<Operation[]> {
-    const all = await this.deps.store.readAll()
-    return all
-      .map((r) => r.record)
-      .filter((op) =>
+    const all = await this.deps.store.readAllOperations()
+    return all.filter(
+      (op) =>
         op.kolId === kolId &&
         op.accountId === accountId &&
         op.status === 'pending',
-      )
+    )
   }
 }
 

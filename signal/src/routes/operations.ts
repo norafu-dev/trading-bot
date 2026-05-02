@@ -1,68 +1,113 @@
 import { Hono } from 'hono'
-import { readFile } from 'node:fs/promises'
-import { PATHS } from '../core/paths.js'
+import type { EventLog } from '../core/event-log.js'
+import type { IOperationStore } from '../domain/copy-trading/operation-store.js'
 import type { Operation } from '../../../shared/types.js'
 
 /**
- * Read-only access to the copy-trading engine's `Operation` log.
+ * Read + write surface over the copy-trading engine's `Operation` log.
  *
- *   GET /api/operations?limit=200&kolId=...&status=...
+ *   GET  /api/operations?limit=200&kolId=...&status=...
+ *   PUT  /api/operations/:id/status   { status, reason? }
  *
- * Returns newest-first. The dashboard `/operations` page polls this
- * to display the sizer + guard pipeline output for every signal.
+ * GET returns newest-first with status-change events folded in. PUT lets
+ * the dashboard's approve/reject buttons advance an operation through its
+ * state machine — currently only `pending → approved | rejected` is
+ * accepted; broker-side transitions (executed / failed) come from the
+ * engine, not from the dashboard.
  */
 
-interface StoredRecord {
-  kind: 'operation'
-  record: Operation
+type DashboardTransition = 'approved' | 'rejected'
+
+const ALLOWED_TRANSITIONS: Record<Operation['status'], DashboardTransition[]> = {
+  pending: ['approved', 'rejected'],
+  approved: [],
+  rejected: [],
+  executed: [],
+  failed: [],
 }
 
-export function createOperationsRoutes() {
-  return new Hono().get('/', async (c) => {
-    const limit = Math.min(Number(c.req.query('limit') ?? 200), 1000)
-    const kolId = c.req.query('kolId') ?? undefined
-    const status = c.req.query('status') ?? undefined
+export function createOperationsRoutes(
+  store: IOperationStore,
+  events: EventLog,
+) {
+  return new Hono()
+    .get('/', async (c) => {
+      const limit = Math.min(Number(c.req.query('limit') ?? 200), 1000)
+      const kolId = c.req.query('kolId') ?? undefined
+      const status = c.req.query('status') ?? undefined
 
-    const records = await readAll()
-    records.reverse()  // newest first
+      const all = await store.readAllOperations()
+      // Newest-first for the dashboard timeline.
+      all.reverse()
 
-    const filtered: Operation[] = []
-    for (const r of records) {
-      if (kolId && r.record.kolId !== kolId) continue
-      if (status && r.record.status !== status) continue
-      filtered.push(r.record)
-      if (filtered.length >= limit) break
-    }
+      const filtered: Operation[] = []
+      for (const op of all) {
+        if (kolId && op.kolId !== kolId) continue
+        if (status && op.status !== status) continue
+        filtered.push(op)
+        if (filtered.length >= limit) break
+      }
 
-    return c.json({
-      operations: filtered,
-      total: records.length,
-      limit,
+      return c.json({
+        operations: filtered,
+        total: all.length,
+        limit,
+      })
     })
-  })
-}
+    .put('/:id/status', async (c) => {
+      const id = c.req.param('id')
+      let body: { status?: unknown; reason?: unknown }
+      try {
+        body = await c.req.json()
+      } catch {
+        return c.json({ error: 'invalid JSON body' }, 400)
+      }
 
-async function readAll(): Promise<StoredRecord[]> {
-  let raw: string
-  try {
-    raw = await readFile(PATHS.operationsLog, 'utf-8')
-  } catch (err) {
-    if (isENOENT(err)) return []
-    throw err
-  }
-  const out: StoredRecord[] = []
-  for (const line of raw.split('\n')) {
-    if (!line.trim()) continue
-    try {
-      const parsed = JSON.parse(line) as StoredRecord
-      if (parsed.kind === 'operation') out.push(parsed)
-    } catch {
-      // skip malformed
-    }
-  }
-  return out
-}
+      if (body.status !== 'approved' && body.status !== 'rejected') {
+        return c.json(
+          { error: "status must be 'approved' or 'rejected'" },
+          400,
+        )
+      }
+      const newStatus: DashboardTransition = body.status
+      const reason = typeof body.reason === 'string' ? body.reason : undefined
 
-function isENOENT(err: unknown): boolean {
-  return err instanceof Error && 'code' in err && (err as NodeJS.ErrnoException).code === 'ENOENT'
+      // Find the current operation. readAllOperations folds prior changes,
+      // so what we see here IS the current view.
+      const all = await store.readAllOperations()
+      const current = all.find((op) => op.id === id)
+      if (!current) return c.json({ error: 'operation not found' }, 404)
+
+      const allowed = ALLOWED_TRANSITIONS[current.status]
+      if (!allowed.includes(newStatus)) {
+        return c.json(
+          {
+            error: `cannot transition from ${current.status} to ${newStatus}`,
+            currentStatus: current.status,
+          },
+          409,
+        )
+      }
+
+      const at = new Date().toISOString()
+      await store.appendStatusChange({
+        operationId: id,
+        newStatus,
+        at,
+        by: 'dashboard',
+        ...(reason !== undefined && { reason }),
+      })
+
+      await events.append('operation.status-changed', {
+        operationId: id,
+        from: current.status,
+        to: newStatus,
+        by: 'dashboard',
+        at,
+        reason,
+      })
+
+      const updated: Operation = { ...current, status: newStatus }
+      return c.json({ operation: updated })
+    })
 }

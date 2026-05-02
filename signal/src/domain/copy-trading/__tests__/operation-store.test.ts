@@ -20,23 +20,23 @@ afterEach(async () => {
 })
 
 describe('OperationStore', () => {
-  it('appends and replays in insertion order', async () => {
+  it('appends and reads operations in insertion order', async () => {
     await store.append(makeOperation({ id: 'op-A' }))
     await store.append(makeOperation({ id: 'op-B' }))
     await store.append(makeOperation({ id: 'op-C' }))
 
-    const all = await store.readAll()
-    expect(all.map((r) => r.record.id)).toEqual(['op-A', 'op-B', 'op-C'])
+    const all = await store.readAllOperations()
+    expect(all.map((op) => op.id)).toEqual(['op-A', 'op-B', 'op-C'])
   })
 
   it('returns nothing on a fresh install', async () => {
-    expect(await store.readAll()).toEqual([])
+    expect(await store.readAllOperations()).toEqual([])
   })
 
   it('creates parent directory on first write', async () => {
     const nested = new OperationStore(join(dir, 'nested', 'deep', 'operations.jsonl'))
     await nested.append(makeOperation())
-    expect((await nested.readAll()).length).toBe(1)
+    expect((await nested.readAllOperations()).length).toBe(1)
   })
 
   it('skips malformed JSON lines but keeps the rest', async () => {
@@ -45,8 +45,8 @@ describe('OperationStore', () => {
     await fs.appendFile(path, 'not json\n', 'utf-8')
     await store.append(makeOperation({ id: 'op-good-2' }))
 
-    const all = await store.readAll()
-    expect(all.map((r) => r.record.id)).toEqual(['op-good-1', 'op-good-2'])
+    const all = await store.readAllOperations()
+    expect(all.map((op) => op.id)).toEqual(['op-good-1', 'op-good-2'])
   })
 
   it('skips records with unknown kind', async () => {
@@ -56,12 +56,12 @@ describe('OperationStore', () => {
         JSON.stringify({ kind: 'operation', record: makeOperation({ id: 'op-real' }) }) + '\n',
       'utf-8',
     )
-    const all = await store.readAll()
+    const all = await store.readAllOperations()
     expect(all).toHaveLength(1)
-    expect(all[0].record.id).toBe('op-real')
+    expect(all[0].id).toBe('op-real')
   })
 
-  it('preserves all operation fields, including nested guardResults + sizingContext', async () => {
+  it('preserves nested guardResults + sizingContext', async () => {
     const op = makeOperation({
       id: 'op-full',
       guardResults: [
@@ -71,7 +71,67 @@ describe('OperationStore', () => {
       sizingContext: { equity: '10000.00', effectiveRiskPercent: '0.9000' },
     })
     await store.append(op)
-    const all = await store.readAll()
-    expect(all[0].record).toEqual(op)
+    const all = await store.readAllOperations()
+    expect(all[0]).toEqual(op)
+  })
+
+  describe('status-change folding', () => {
+    it('applies a status-change event onto the original operation', async () => {
+      await store.append(makeOperation({ id: 'op-1', status: 'pending' }))
+      await store.appendStatusChange({
+        operationId: 'op-1',
+        newStatus: 'approved',
+        at: '2026-05-02T10:00:00Z',
+        by: 'dashboard',
+      })
+
+      const all = await store.readAllOperations()
+      expect(all).toHaveLength(1)
+      expect(all[0].status).toBe('approved')
+    })
+
+    it('applies the latest status when several events stack', async () => {
+      await store.append(makeOperation({ id: 'op-1', status: 'pending' }))
+      await store.appendStatusChange({ operationId: 'op-1', newStatus: 'approved', at: '2026-05-02T10:00:00Z', by: 'dashboard' })
+      await store.appendStatusChange({ operationId: 'op-1', newStatus: 'executed', at: '2026-05-02T10:01:00Z', by: 'broker' })
+
+      const all = await store.readAllOperations()
+      expect(all[0].status).toBe('executed')
+    })
+
+    it('skips status-change events targeting an unknown operation', async () => {
+      await store.appendStatusChange({ operationId: 'orphan', newStatus: 'approved', at: '2026-05-02T10:00:00Z', by: 'dashboard' })
+      // Should not throw or include any operation
+      expect(await store.readAllOperations()).toEqual([])
+    })
+
+    it('does not affect other operations', async () => {
+      await store.append(makeOperation({ id: 'op-A', status: 'pending' }))
+      await store.append(makeOperation({ id: 'op-B', status: 'pending' }))
+      await store.appendStatusChange({ operationId: 'op-A', newStatus: 'rejected', at: '2026-05-02T10:00:00Z', by: 'dashboard', reason: 'human declined' })
+
+      const all = await store.readAllOperations()
+      const a = all.find((op) => op.id === 'op-A')!
+      const b = all.find((op) => op.id === 'op-B')!
+      expect(a.status).toBe('rejected')
+      expect(b.status).toBe('pending')
+    })
+
+    it('replay() yields both operation and status-change records in order (audit trail)', async () => {
+      await store.append(makeOperation({ id: 'op-1' }))
+      await store.appendStatusChange({ operationId: 'op-1', newStatus: 'approved', at: '2026-05-02T10:00:00Z', by: 'dashboard' })
+      await store.append(makeOperation({ id: 'op-2' }))
+
+      const out: { kind: string; id: string }[] = []
+      for await (const r of store.replay()) {
+        if (r.kind === 'operation') out.push({ kind: r.kind, id: r.record.id })
+        else out.push({ kind: r.kind, id: r.operationId })
+      }
+      expect(out).toEqual([
+        { kind: 'operation', id: 'op-1' },
+        { kind: 'status-change', id: 'op-1' },
+        { kind: 'operation', id: 'op-2' },
+      ])
+    })
   })
 })

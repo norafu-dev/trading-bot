@@ -168,7 +168,7 @@ export default function OperationsPage() {
       {!loading && operations.length > 0 && (
         <div className="mt-6 space-y-3">
           {operations.map((op) => (
-            <OperationCard key={op.id} op={op} kol={kolMap.get(op.kolId)} />
+            <OperationCard key={op.id} op={op} kol={kolMap.get(op.kolId)} onChanged={refresh} />
           ))}
         </div>
       )}
@@ -178,12 +178,40 @@ export default function OperationsPage() {
 
 // ==================== Card ====================
 
-function OperationCard({ op, kol }: { op: Operation; kol?: KolConfig }) {
+function OperationCard({ op, kol, onChanged }: { op: Operation; kol?: KolConfig; onChanged: () => Promise<void> }) {
   const [showDetails, setShowDetails] = useState(false);
+  const [showRejectInput, setShowRejectInput] = useState(false);
+  const [rejectReason, setRejectReason] = useState("");
+  const [pending, setPending] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const spec = op.spec;
   const sideTone = spec.action === "placeOrder"
     ? spec.side === "long" ? "text-green-400" : "text-red-400"
     : "text-muted-foreground";
+
+  const submit = async (status: "approved" | "rejected", reason?: string) => {
+    setPending(true);
+    setActionError(null);
+    try {
+      await operationApi.setStatus(op.id, status, reason);
+      await onChanged();
+    } catch (e) {
+      setActionError((e as Error).message);
+    } finally {
+      setPending(false);
+    }
+  };
+
+  const onApprove = () => {
+    if (!confirm(`确认批准这单操作吗？\n${spec.action === "placeOrder" ? `${spec.symbol} ${spec.side} ${spec.size.value}` : spec.action}`)) return;
+    void submit("approved");
+  };
+
+  const onRejectConfirm = () => {
+    void submit("rejected", rejectReason.trim() || undefined);
+    setShowRejectInput(false);
+    setRejectReason("");
+  };
 
   return (
     <div className="rounded-xl border border-border bg-card p-4 shadow-sm transition-colors hover:border-primary/30">
@@ -241,6 +269,51 @@ function OperationCard({ op, kol }: { op: Operation; kol?: KolConfig }) {
           {op.guardRejection && (
             <div className="mt-2 rounded-md border border-red-500/30 bg-red-500/10 px-2 py-1.5 text-xs text-red-400">
               <span className="font-medium">[{op.guardRejection.guardName}]</span> {op.guardRejection.reason}
+            </div>
+          )}
+
+          {/* Approve / reject controls (pending only) */}
+          {op.status === "pending" && (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <button
+                disabled={pending}
+                onClick={onApprove}
+                className="inline-flex items-center gap-1 rounded-md border border-green-500/40 bg-green-500/10 px-3 py-1.5 text-xs font-medium text-green-400 transition hover:bg-green-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                ✓ 批准并下单
+              </button>
+              <button
+                disabled={pending}
+                onClick={() => setShowRejectInput((s) => !s)}
+                className="inline-flex items-center gap-1 rounded-md border border-red-500/40 bg-red-500/10 px-3 py-1.5 text-xs font-medium text-red-400 transition hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                ✗ 拒绝
+              </button>
+              {actionError && <span className="text-xs text-red-400">{actionError}</span>}
+            </div>
+          )}
+          {showRejectInput && op.status === "pending" && (
+            <div className="mt-2 flex items-center gap-2">
+              <input
+                value={rejectReason}
+                onChange={(e) => setRejectReason(e.target.value)}
+                placeholder="拒绝理由（可选）"
+                className="flex-1 rounded-md border border-border bg-muted px-2 py-1 text-xs text-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/50"
+                autoFocus
+              />
+              <button
+                disabled={pending}
+                onClick={onRejectConfirm}
+                className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-1 text-xs font-medium text-red-400 transition hover:bg-red-500/20 disabled:opacity-50"
+              >
+                确认拒绝
+              </button>
+              <button
+                onClick={() => { setShowRejectInput(false); setRejectReason(""); }}
+                className="rounded-md border border-border bg-muted px-3 py-1 text-xs text-muted-foreground hover:text-foreground"
+              >
+                取消
+              </button>
             </div>
           )}
 

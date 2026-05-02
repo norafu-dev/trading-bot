@@ -363,6 +363,11 @@ export const operationApi = {
     const qs = search.toString();
     return api<OperationListResult>(`/operations${qs ? `?${qs}` : ""}`);
   },
+  setStatus: (id: string, status: "approved" | "rejected", reason?: string) =>
+    api<{ operation: Operation }>(`/operations/${encodeURIComponent(id)}/status`, {
+      method: "PUT",
+      body: JSON.stringify({ status, ...(reason !== undefined && { reason }) }),
+    }),
 };
 
 // ==================== Risk Config API ====================
