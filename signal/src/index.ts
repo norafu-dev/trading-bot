@@ -10,6 +10,7 @@ import { createTradingConfigRoutes } from './routes/trading-config.js'
 import { createTradingRoutes } from './routes/trading.js'
 import { createSignalRoutes } from './routes/signals.js'
 import { createEventRoutes } from './routes/events.js'
+import { createLlmConfigRoutes } from './routes/llm-config.js'
 import { createPipeline } from './pipeline.js'
 import { logger } from './core/logger.js'
 
@@ -60,6 +61,7 @@ app.route('/api/trading/config', createTradingConfigRoutes())
 app.route('/api/trading', createTradingRoutes())
 app.route('/api/signals', createSignalRoutes())
 app.route('/api/events', createEventRoutes())
+app.route('/api/config/llm', createLlmConfigRoutes())
 
 serve({ fetch: app.fetch, port: PORT }, (info) => {
   console.log(`[Signal] Server running on http://localhost:${info.port}`)

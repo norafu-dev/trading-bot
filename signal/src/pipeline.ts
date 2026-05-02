@@ -22,6 +22,7 @@
 
 import type { RawAttachment, RawDiscordMessage, RawEmbed, RawReference } from '../../shared/types.js'
 import { createEventLog, type EventLog } from './core/event-log.js'
+import { loadLlmConfig } from './core/llm-config.js'
 import { logger } from './core/logger.js'
 import { PATHS } from './core/paths.js'
 import type { MessageBundle } from './domain/signals/ingestion/aggregator/types.js'
@@ -51,11 +52,6 @@ import { ResultRouter } from './domain/signals/routing/result-router.js'
 
 const DEFAULT_IDLE_TIMEOUT_MS = 30_000
 const DEFAULT_MAX_DURATION_MS = 120_000
-
-// ── LLM model defaults — fast model for classify, capable model for extract ─
-
-const DEFAULT_CLASSIFY_MODEL = 'google/gemini-2.5-flash'
-const DEFAULT_EXTRACT_MODEL = 'anthropic/claude-sonnet-4.5'
 
 // ── Public surface ──────────────────────────────────────────────────────────
 
@@ -118,27 +114,34 @@ export async function createPipeline(deps: PipelineDeps = {}): Promise<SignalPip
   const regexParser = new RegexStructuredParser(regexConfigRegistry)
   parserRegistry.registerBase(regexParser)
 
-  // ── 5. LLM provider — only wired if an API key is present
-  const llmKey = process.env['OPENROUTER_API_KEY']
+  // ── 5. LLM provider — wired only when an API key is configured
+  // Source priority: data/config/llm.json → env vars → empty.
+  const llmConfig = await loadLlmConfig()
   let llmProvider: ILlmProvider | undefined
   let sessionLogger: ISessionLogger | undefined
-  if (llmKey) {
+  if (llmConfig.apiKey) {
     llmProvider = new OpenRouterProvider(
-      DEFAULT_CLASSIFY_MODEL,
-      DEFAULT_EXTRACT_MODEL,
-      llmKey,
+      llmConfig.classifyModel,
+      llmConfig.extractModel,
+      llmConfig.apiKey,
+      llmConfig.baseUrl,
     )
     sessionLogger = new SessionLogger(PATHS.dataRoot)
-    parserRegistry.registerLlm(new LlmParser('llm_text'))
-    parserRegistry.registerLlm(new LlmParser('llm_vision'))
-    parserRegistry.registerLlm(new HybridParser(regexParser))
+    parserRegistry.registerLlm(new LlmParser('llm_text', llmConfig.confidenceThreshold))
+    parserRegistry.registerLlm(new LlmParser('llm_vision', llmConfig.confidenceThreshold))
+    parserRegistry.registerLlm(new HybridParser(regexParser, llmConfig.confidenceThreshold))
     logger.info(
-      { classifyModel: DEFAULT_CLASSIFY_MODEL, extractModel: DEFAULT_EXTRACT_MODEL },
+      {
+        classifyModel: llmConfig.classifyModel,
+        extractModel: llmConfig.extractModel,
+        baseUrl: llmConfig.baseUrl,
+        confidenceThreshold: llmConfig.confidenceThreshold,
+      },
       'Pipeline: OpenRouter LLM provider configured',
     )
   } else {
     logger.warn(
-      'Pipeline: OPENROUTER_API_KEY not set — LLM strategies will fail with code=unknown until configured',
+      'Pipeline: no LLM API key configured (set via dashboard /settings or OPENROUTER_API_KEY env). LLM strategies will fail with code=unknown until configured.',
     )
   }
 

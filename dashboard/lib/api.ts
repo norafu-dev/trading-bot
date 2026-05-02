@@ -280,3 +280,48 @@ export const eventApi = {
     return api<EventListResult>(`/events${qs ? `?${qs}` : ""}`);
   },
 };
+
+// ==================== LLM Config API ====================
+
+export interface PublicLlmConfig {
+  provider: "openrouter";
+  baseUrl: string;
+  classifyModel: string;
+  extractModel: string;
+  confidenceThreshold: number;
+  apiKeyConfigured: boolean;
+  apiKeyLast4: string;
+}
+
+export interface LlmConfigUpdate {
+  apiKey?: string;
+  baseUrl?: string;
+  classifyModel?: string;
+  extractModel?: string;
+  confidenceThreshold?: number;
+}
+
+export type LlmTestResult =
+  | {
+      ok: true;
+      model: string;
+      latencyMs: number;
+      inputTokens: number;
+      outputTokens: number;
+      note: string;
+    }
+  | { ok: false; error: string };
+
+export const llmConfigApi = {
+  get: () => api<PublicLlmConfig>("/config/llm"),
+  update: (data: LlmConfigUpdate) =>
+    api<PublicLlmConfig>("/config/llm", {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+  test: (data: LlmConfigUpdate) =>
+    api<LlmTestResult>("/config/llm/test", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+};
