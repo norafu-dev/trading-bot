@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { readTradingAccountsConfig } from '../domain/trading/config-store.js'
-import { createCcxtInstance, type CcxtInstance } from '../domain/trading/ccxt-pool.js'
+import { createCcxtInstance, type CcxtExchange } from '../domain/trading/ccxt-pool.js'
 import type { AccountBalance, TradePosition } from '../../../shared/types.js'
 
 export function createTradingRoutes() {
@@ -29,7 +29,7 @@ export function createTradingRoutes() {
     /** Fetch account balance from the exchange. */
     .get('/accounts/:id/balance', async (c) => {
       const id = c.req.param('id')
-      let inst: { close?: () => Promise<void> } | null = null
+      let inst: CcxtExchange | null = null
       try {
         const accounts = await readTradingAccountsConfig()
         const account = accounts.find((a) => a.id === id)
@@ -37,10 +37,10 @@ export function createTradingRoutes() {
         if (!account.enabled) return c.json({ error: `Account "${id}" is disabled` }, 400)
 
         inst = createCcxtInstance(account)
-        const exchange = inst as Awaited<ReturnType<typeof createCcxtInstance>>
+        const exchange = inst
 
         await exchange.loadMarkets()
-        const raw = (await exchange.fetchBalance()) as Record<string, Record<string, unknown>>
+        const raw = await exchange.fetchBalance() as unknown as Record<string, Record<string, unknown>>
 
         const free = parseFloat(String(raw.free?.USDT ?? raw.free?.USD ?? 0))
         const used = parseFloat(String(raw.used?.USDT ?? raw.used?.USD ?? 0))
@@ -73,12 +73,12 @@ export function createTradingRoutes() {
 
         const results = await Promise.all(
           enabled.map(async (account) => {
-            let inst: { close?: () => Promise<void> } | null = null
+            let inst: CcxtExchange | null = null
             try {
               inst = createCcxtInstance(account)
-              const ex = inst as CcxtInstance
+              const ex = inst
               await ex.loadMarkets()
-              const raw = (await ex.fetchBalance()) as Record<string, Record<string, unknown>>
+              const raw = (await ex.fetchBalance()) as unknown as Record<string, Record<string, unknown>>
               const free  = parseFloat(String(raw.free?.USDT  ?? raw.free?.USD  ?? 0))
               const used  = parseFloat(String(raw.used?.USDT  ?? raw.used?.USD  ?? 0))
               const total = parseFloat(String(raw.total?.USDT ?? raw.total?.USD ?? 0))
@@ -88,7 +88,7 @@ export function createTradingRoutes() {
               try {
                 const rawPos = await ex.fetchPositions()
                 for (const p of rawPos) {
-                  const pos = p as Record<string, unknown>
+                  const pos = p as unknown as Record<string, unknown>
                   unrealizedPnl += parseFloat(String(pos.unrealizedPnl ?? 0))
                 }
               } catch { /* exchange may not support fetchPositions */ }
@@ -129,7 +129,7 @@ export function createTradingRoutes() {
     /** Fetch open positions from the exchange. */
     .get('/accounts/:id/positions', async (c) => {
       const id = c.req.param('id')
-      let inst: { close?: () => Promise<void> } | null = null
+      let inst: CcxtExchange | null = null
       try {
         const accounts = await readTradingAccountsConfig()
         const account = accounts.find((a) => a.id === id)
@@ -137,7 +137,7 @@ export function createTradingRoutes() {
         if (!account.enabled) return c.json({ error: `Account "${id}" is disabled` }, 400)
 
         inst = createCcxtInstance(account)
-        const exchange = inst as Awaited<ReturnType<typeof createCcxtInstance>>
+        const exchange = inst
 
         await exchange.loadMarkets()
 

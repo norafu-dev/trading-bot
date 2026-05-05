@@ -119,7 +119,7 @@ export class SnapshotService implements ISnapshotService {
         client.fetchPositions(),
       ])
 
-      const balance = parseBalance(account.id, rawBalance as Record<string, Record<string, unknown>>)
+      const balance = parseBalance(account.id, rawBalance as unknown as Record<string, Record<string, unknown>>)
       const positions = parsePositions(rawPositions as unknown[])
       const snapshot: AccountSnapshot = { balance, positions }
       this.snapshots.set(account.id, snapshot)

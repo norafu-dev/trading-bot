@@ -53,6 +53,11 @@ import type { IOperationStore } from './domain/copy-trading/operation-store.js'
 import { OperationStore } from './domain/copy-trading/operation-store.js'
 import { ApprovalService } from './domain/copy-trading/approval/approval-service.js'
 import { ApprovalTimeouts } from './domain/copy-trading/approval/approval-timeouts.js'
+import { BrokerDispatcher } from './domain/copy-trading/execution/broker-dispatcher.js'
+import { CcxtCryptoBroker } from './domain/copy-trading/execution/crypto-broker.js'
+import { OrderExecutor } from './domain/copy-trading/execution/order-executor.js'
+import { loadExecutionConfig } from './core/execution-config.js'
+import { createCcxtInstance } from './domain/trading/ccxt-pool.js'
 import { loadTelegramConfig } from './core/telegram-config.js'
 import { TelegramClient } from './connectors/telegram/client.js'
 import { TelegramNotifier } from './connectors/telegram/notifier.js'
@@ -287,6 +292,40 @@ export async function createPipeline(deps: PipelineDeps = {}): Promise<SignalPip
   })
   await approvalTimeouts.start()
 
+  // ── 7e. Broker dispatcher — turns approved operations into broker
+  // orders. Reads ExecutionConfig per operation, so dashboard flips of
+  // dry-run ↔ live take effect immediately. We instantiate the broker
+  // lazily against the first enabled CCXT account at execute time
+  // (rather than at boot) so a config change to accounts.json doesn't
+  // require a restart.
+  const accounts0 = await readTradingAccountsConfig()
+  const ccxtAccount = accounts0.find((a) => a.enabled && a.type === 'ccxt')
+  let brokerDispatcher: BrokerDispatcher | null = null
+  if (ccxtAccount) {
+    const exchange = createCcxtInstance(ccxtAccount)
+    const broker = new CcxtCryptoBroker(exchange)
+    const executor = new OrderExecutor({
+      broker,
+      loadExecutionConfig,
+    })
+    brokerDispatcher = new BrokerDispatcher({
+      store: operationStore,
+      events: eventLog,
+      approvals: approvalService,
+      executor,
+    })
+    brokerDispatcher.start()
+    const cfg = await loadExecutionConfig()
+    logger.info(
+      { mode: cfg.mode, account: ccxtAccount.id, exchange: ccxtAccount.brokerConfig.exchange },
+      `Pipeline: broker dispatcher ready (${cfg.mode === 'live' ? 'LIVE TRADING' : 'dry-run'})`,
+    )
+  } else {
+    logger.warn(
+      'Pipeline: no enabled CCXT account — broker dispatcher disabled. Approved operations will sit in `approved` state forever.',
+    )
+  }
+
   // ── 8. Result router (linker + index + store + events + copy-trading hook)
   const linker = new UpdateLinker([
     new ByExternalIdStrategy(),
@@ -415,6 +454,7 @@ export async function createPipeline(deps: PipelineDeps = {}): Promise<SignalPip
     async shutdown(): Promise<void> {
       logger.info('Pipeline: flushing in-flight bundles…')
       await aggregator.flushAll()
+      if (brokerDispatcher) brokerDispatcher.stop()
       await approvalTimeouts.stop()
       if (telegramListener) await telegramListener.stop()
       if (telegramNotifier) await telegramNotifier.stop()

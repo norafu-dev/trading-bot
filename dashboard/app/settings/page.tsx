@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { llmConfigApi, riskConfigApi, telegramConfigApi } from "@/lib/api";
+import { executionConfigApi, llmConfigApi, riskConfigApi, telegramConfigApi } from "@/lib/api";
 import type {
+  ExecutionConfig,
   LlmTestResult,
   PublicLlmConfig,
   PublicTelegramConfig,
@@ -81,6 +82,7 @@ export default function SettingsPage() {
             }}
           />
         )}
+        <ExecutionConfigCard />
         <RiskConfigCard />
         <TelegramConfigCard onSaved={() => setRestartHint(true)} />
       </div>
@@ -489,6 +491,225 @@ function Inner({
             className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary-hover disabled:opacity-50"
           >
             {saving ? "保存中…" : "保存风控"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ==================== Execution Config Card ====================
+
+/**
+ * Execution mode + safety knobs. Top-level switch is dry-run ↔ live;
+ * flipping to live requires an explicit typed confirmation because every
+ * subsequent approved Operation will hit the real exchange. Saves take
+ * effect immediately — the broker dispatcher reads this config per
+ * operation, so this is also the fastest emergency stop-trading lever.
+ */
+function ExecutionConfigCard() {
+  const [config, setConfig] = useState<ExecutionConfig | null>(null);
+  const [draft, setDraft] = useState<ExecutionConfig | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      const cfg = await executionConfigApi.get();
+      setConfig(cfg);
+      setDraft(cfg);
+      setError(null);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, []);
+
+  useEffect(() => { void refresh(); }, [refresh]);
+
+  if (!config || !draft) {
+    return (
+      <div className="rounded-xl border border-border bg-card p-6 text-sm text-muted-foreground">
+        {error ?? "加载执行配置中…"}
+      </div>
+    );
+  }
+
+  const dirty = JSON.stringify(config) !== JSON.stringify(draft);
+  const isLive = config.mode === "live";
+  const willGoLive = config.mode === "dry-run" && draft.mode === "live";
+
+  const handleSave = async () => {
+    if (willGoLive) {
+      const confirmText = prompt(
+        "切到 LIVE 后，每一笔被批准的 Operation 都会真实下单到交易所。\n\n如确认，请输入 LIVE （大写）以继续：",
+      );
+      if (confirmText !== "LIVE") {
+        alert("已取消");
+        return;
+      }
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      const next = await executionConfigApi.update(draft);
+      setConfig(next);
+      setDraft(next);
+      setSavedAt(Date.now());
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div
+      className={`rounded-xl border p-6 ${
+        isLive ? "border-red-500/40 bg-red-500/5" : "border-border bg-card"
+      }`}
+    >
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-lg font-semibold">执行模式（broker）</h2>
+          <p className="mt-1 text-xs text-muted-foreground">
+            被批准的 Operation 进入这一层。Dry-run 时只记日志不下单；live 时调用 CCXT 真下单。
+          </p>
+        </div>
+        <span
+          className={`shrink-0 rounded-md border px-3 py-1.5 text-xs font-bold uppercase tracking-wide ${
+            isLive
+              ? "border-red-500/40 bg-red-500/10 text-red-400"
+              : "border-amber-500/40 bg-amber-500/10 text-amber-400"
+          }`}
+        >
+          {isLive ? "🔴 LIVE 真金白银" : "🟡 DRY-RUN 演练"}
+        </span>
+      </div>
+
+      <div className="mt-5 space-y-4">
+        <div>
+          <label className={labelClass}>模式</label>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setDraft({ ...draft, mode: "dry-run" })}
+              className={`flex-1 rounded-lg border px-4 py-2 text-sm font-medium transition-colors ${
+                draft.mode === "dry-run"
+                  ? "border-amber-500/40 bg-amber-500/10 text-amber-400"
+                  : "border-border bg-muted text-muted-foreground hover:bg-muted/70"
+              }`}
+            >
+              🟡 Dry-run（不下单）
+            </button>
+            <button
+              onClick={() => setDraft({ ...draft, mode: "live" })}
+              className={`flex-1 rounded-lg border px-4 py-2 text-sm font-medium transition-colors ${
+                draft.mode === "live"
+                  ? "border-red-500/40 bg-red-500/10 text-red-400"
+                  : "border-border bg-muted text-muted-foreground hover:bg-muted/70"
+              }`}
+            >
+              🔴 Live（真下单）
+            </button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className={labelClass}>单笔最大名义金额 (USDT)</label>
+            <input
+              type="number"
+              min={0}
+              value={draft.maxOrderUsdt}
+              onChange={(e) =>
+                setDraft({ ...draft, maxOrderUsdt: Number(e.target.value) })
+              }
+              className={inputClass}
+            />
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              超过此值的 Operation 直接拒单。0 = 不限。
+            </p>
+          </div>
+          <div>
+            <label className={labelClass}>滑点容忍 (%)</label>
+            <input
+              type="number"
+              min={0}
+              step="0.1"
+              value={draft.slippageTolerancePercent}
+              onChange={(e) =>
+                setDraft({
+                  ...draft,
+                  slippageTolerancePercent: Number(e.target.value),
+                })
+              }
+              className={inputClass}
+            />
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              市价单实时价偏离信号超过此值则拒单（暂未启用，等 Phase 7）。
+            </p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={draft.setLeverage}
+              onChange={(e) =>
+                setDraft({ ...draft, setLeverage: e.target.checked })
+              }
+              className="h-4 w-4 rounded border-border bg-muted"
+            />
+            自动设置杠杆
+          </label>
+          <div>
+            <label className={labelClass}>保证金模式</label>
+            <select
+              value={draft.marginMode}
+              onChange={(e) =>
+                setDraft({
+                  ...draft,
+                  marginMode: e.target.value as "isolated" | "cross",
+                })
+              }
+              className={inputClass}
+            >
+              <option value="isolated">逐仓</option>
+              <option value="cross">全仓</option>
+            </select>
+          </div>
+        </div>
+
+        {willGoLive && (
+          <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-400">
+            ⚠️ 你正在把执行模式切到 <b>LIVE</b>。保存后下一笔被批准的 Operation 就会真实下单。建议先在 Dry-run 模式下走通几笔，再切。
+          </div>
+        )}
+
+        {error && (
+          <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-400">
+            {error}
+          </div>
+        )}
+
+        {savedAt && Date.now() - savedAt < 3000 && (
+          <div className="rounded-lg border border-green-500/30 bg-green-500/10 px-3 py-2 text-xs text-green-400">
+            ✅ 已保存，立即生效（无需重启）
+          </div>
+        )}
+
+        <div className="flex justify-end pt-2">
+          <button
+            onClick={() => void handleSave()}
+            disabled={!dirty || saving}
+            className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors disabled:opacity-50 ${
+              willGoLive
+                ? "bg-red-500/20 text-red-400 hover:bg-red-500/30"
+                : "bg-primary text-primary-foreground hover:bg-primary-hover"
+            }`}
+          >
+            {saving ? "保存中…" : willGoLive ? "切到 LIVE（需确认）" : "保存执行配置"}
           </button>
         </div>
       </div>

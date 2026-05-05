@@ -368,6 +368,27 @@ export const telegramConfigApi = {
     }),
 };
 
+// ==================== Execution Config API ====================
+
+export interface ExecutionConfig {
+  mode: "dry-run" | "live";
+  slippageTolerancePercent: number;
+  maxOrderUsdt: number;
+  setLeverage: boolean;
+  marginMode: "isolated" | "cross";
+}
+
+export type ExecutionConfigUpdate = Partial<ExecutionConfig>;
+
+export const executionConfigApi = {
+  get: () => api<ExecutionConfig>("/config/execution"),
+  update: (data: ExecutionConfigUpdate) =>
+    api<ExecutionConfig>("/config/execution", {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+};
+
 // ==================== Pipeline (dev tool) API ====================
 
 export interface InjectResult {

@@ -1,23 +1,30 @@
-import ccxt from 'ccxt'
+import ccxt, { type Exchange } from 'ccxt'
 import type { TradingAccountConfig } from '../../../../shared/types.js'
 
-export type CcxtInstance = {
-  loadMarkets: () => Promise<unknown>
-  fetchBalance: () => Promise<unknown>
-  fetchPositions: () => Promise<unknown[]>
-  setSandboxMode: (enabled: boolean) => void
-  enableDemoTrading?: (enabled: boolean) => void
-  checkRequiredCredentials: () => void
-  close?: () => Promise<void>
-}
+/**
+ * Re-export `Exchange` so other modules (snapshot service, broker, etc.)
+ * import it from a single seam. CCXT's runtime type uses `any` for several
+ * of its method results, but for our purposes the methods we touch
+ * (loadMarkets / fetchBalance / fetchPositions / fetchTicker /
+ * createOrder / setLeverage / setMarginMode / cancelOrder / fetchOrder)
+ * are well-typed enough.
+ */
+export type { Exchange as CcxtExchange } from 'ccxt'
 
-type CcxtExchangeCtor = new (params?: Record<string, unknown>) => CcxtInstance
+/**
+ * Legacy shadow shape for snapshot service. Kept for back-compat — new
+ * code should import `CcxtExchange` directly. The 5 listed methods are
+ * the strict subset SnapshotService needs.
+ */
+export type CcxtInstance = Exchange
+
+type CcxtExchangeCtor = new (params?: Record<string, unknown>) => Exchange
 
 /**
  * Instantiate a CCXT exchange from a saved TradingAccountConfig.
  * Caller is responsible for calling `close()` when done.
  */
-export function createCcxtInstance(config: TradingAccountConfig): CcxtInstance {
+export function createCcxtInstance(config: TradingAccountConfig): Exchange {
   const { brokerConfig } = config
   const exchangeName = brokerConfig.exchange
   if (typeof exchangeName !== 'string' || !exchangeName) {
