@@ -34,10 +34,12 @@ export const SENSITIVE_FIELD_PATTERN = /key|secret|password|token|passphrase|pri
 
 const ccxtSecretsSchema = z.record(z.string(), z.record(z.string(), z.string()))
 const openrouterSecretsSchema = z.object({ apiKey: z.string().optional() }).optional()
+const telegramSecretsSchema = z.object({ botToken: z.string().optional() }).optional()
 
 const secretsFileSchema = z.object({
   ccxt: ccxtSecretsSchema.optional().default({}),
   openrouter: openrouterSecretsSchema,
+  telegram: telegramSecretsSchema,
 })
 
 export type SecretsFile = z.infer<typeof secretsFileSchema>

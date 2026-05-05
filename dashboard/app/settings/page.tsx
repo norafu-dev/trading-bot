@@ -1,8 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { llmConfigApi, riskConfigApi } from "@/lib/api";
-import type { LlmTestResult, PublicLlmConfig } from "@/lib/api";
+import { llmConfigApi, riskConfigApi, telegramConfigApi } from "@/lib/api";
+import type {
+  LlmTestResult,
+  PublicLlmConfig,
+  PublicTelegramConfig,
+  TelegramTestResult,
+} from "@/lib/api";
 import type { RiskConfig } from "@shared/types";
 
 // ==================== Page ====================
@@ -77,6 +82,7 @@ export default function SettingsPage() {
           />
         )}
         <RiskConfigCard />
+        <TelegramConfigCard onSaved={() => setRestartHint(true)} />
       </div>
     </div>
   );
@@ -483,6 +489,218 @@ function Inner({
             className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary-hover disabled:opacity-50"
           >
             {saving ? "保存中…" : "保存风控"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ==================== Telegram Config Card ====================
+
+/**
+ * Telegram approval channel config. The bot token is masked once stored
+ * (only last 4 chars shown); leaving the field blank on save preserves
+ * the existing token. Enabled/chatId/timeout edits — like LLM config —
+ * require a restart because the long-poll loop and notifier subscriptions
+ * are wired at boot time. We surface this via the same `onSaved` hook
+ * that LLM config uses to flip the page-level "restart required" banner.
+ */
+function TelegramConfigCard({ onSaved }: { onSaved: () => void }) {
+  const [stored, setStored] = useState<PublicTelegramConfig | null>(null);
+  const [draft, setDraft] = useState<{
+    enabled: boolean;
+    chatId: string;
+    approvalTimeoutSeconds: string;
+    botToken: string;
+  } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<TelegramTestResult | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      const cfg = await telegramConfigApi.get();
+      setStored(cfg);
+      setDraft({
+        enabled: cfg.enabled,
+        chatId: String(cfg.chatId),
+        approvalTimeoutSeconds: String(cfg.approvalTimeoutSeconds),
+        botToken: "",
+      });
+      setError(null);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, []);
+
+  useEffect(() => { void refresh(); }, [refresh]);
+
+  if (!stored || !draft) {
+    return (
+      <div className="rounded-xl border border-border bg-card p-6 text-sm text-muted-foreground">
+        {error ?? "加载 Telegram 配置中…"}
+      </div>
+    );
+  }
+
+  const buildUpdate = () => ({
+    enabled: draft.enabled,
+    chatId: Number(draft.chatId),
+    approvalTimeoutSeconds: Number(draft.approvalTimeoutSeconds),
+    ...(draft.botToken.length > 0 && { botToken: draft.botToken }),
+  });
+
+  const handleSave = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      const next = await telegramConfigApi.update(buildUpdate());
+      setStored(next);
+      setDraft({
+        enabled: next.enabled,
+        chatId: String(next.chatId),
+        approvalTimeoutSeconds: String(next.approvalTimeoutSeconds),
+        botToken: "",
+      });
+      onSaved();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleTest = async () => {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const result = await telegramConfigApi.test(buildUpdate());
+      setTestResult(result);
+    } catch (e) {
+      setTestResult({ ok: false, error: (e as Error).message });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  return (
+    <div className="rounded-xl border border-border bg-card p-6">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-lg font-semibold">Telegram 审批通道</h2>
+          <p className="mt-1 text-xs text-muted-foreground">
+            待审批的 Operation 推到这个 chat，inline 按钮直接批准/拒绝。超时后自动按拒绝处理。
+          </p>
+        </div>
+        <span
+          className={`shrink-0 rounded-md border px-2 py-1 text-[10px] font-medium uppercase tracking-wide ${
+            stored.enabled && stored.botTokenConfigured && stored.chatId !== 0
+              ? "border-green-500/40 bg-green-500/10 text-green-400"
+              : "border-amber-500/40 bg-amber-500/10 text-amber-400"
+          }`}
+        >
+          {stored.enabled && stored.botTokenConfigured && stored.chatId !== 0 ? "已启用" : "未启用"}
+        </span>
+      </div>
+
+      <div className="mt-5 space-y-4">
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={draft.enabled}
+            onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })}
+            className="h-4 w-4 rounded border-border bg-muted"
+          />
+          启用 Telegram 审批通道（关闭则只走 Dashboard 审批）
+        </label>
+
+        <div>
+          <label className={labelClass}>Chat ID</label>
+          <input
+            type="text"
+            inputMode="numeric"
+            value={draft.chatId}
+            onChange={(e) => setDraft({ ...draft, chatId: e.target.value })}
+            placeholder="例如 -5136040062（group ID 是负数）"
+            className={inputClass}
+          />
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            私聊正整数；group / supergroup 为负数。Bot 必须已被加入该 chat。
+          </p>
+        </div>
+
+        <div>
+          <label className={labelClass}>Bot Token</label>
+          <input
+            type="password"
+            value={draft.botToken}
+            onChange={(e) => setDraft({ ...draft, botToken: e.target.value })}
+            placeholder={
+              stored.botTokenConfigured
+                ? `已配置 (•••${stored.botTokenLast4}) — 留空保持不变`
+                : "粘贴 BotFather 给的 token"
+            }
+            className={`${inputClass} font-mono`}
+          />
+        </div>
+
+        <div>
+          <label className={labelClass}>审批超时（秒）</label>
+          <input
+            type="number"
+            min={0}
+            value={draft.approvalTimeoutSeconds}
+            onChange={(e) =>
+              setDraft({ ...draft, approvalTimeoutSeconds: e.target.value })
+            }
+            className={inputClass}
+          />
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            到期未审批的 Operation 自动按"拒绝"处理。0 = 不超时。默认 300 秒（5 分钟）。
+          </p>
+        </div>
+
+        {testResult && (
+          <div
+            className={`rounded-lg border px-3 py-2 text-xs ${
+              testResult.ok
+                ? "border-green-500/40 bg-green-500/10 text-green-400"
+                : "border-red-500/40 bg-red-500/10 text-red-400"
+            }`}
+          >
+            {testResult.ok ? (
+              <>
+                ✅ 已发送测试消息到 chat <code className="font-mono">{testResult.chatId}</code> · bot{" "}
+                <code className="font-mono">@{testResult.botUsername}</code> · {testResult.latencyMs}ms
+              </>
+            ) : (
+              <>❌ {testResult.error}</>
+            )}
+          </div>
+        )}
+
+        {error && (
+          <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-400">
+            {error}
+          </div>
+        )}
+
+        <div className="flex justify-end gap-2 pt-2">
+          <button
+            onClick={() => void handleTest()}
+            disabled={testing || saving}
+            className="rounded-lg border border-border bg-muted px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted/70 disabled:opacity-50"
+          >
+            {testing ? "测试中…" : "测试连通"}
+          </button>
+          <button
+            onClick={() => void handleSave()}
+            disabled={saving || testing}
+            className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary-hover disabled:opacity-50"
+          >
+            {saving ? "保存中…" : "保存 Telegram"}
           </button>
         </div>
       </div>

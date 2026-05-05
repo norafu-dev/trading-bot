@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
 import type { EventLog } from '../core/event-log.js'
+import type { ApprovalService } from '../domain/copy-trading/approval/approval-service.js'
 import type { IOperationStore } from '../domain/copy-trading/operation-store.js'
 import type { Operation } from '../../../shared/types.js'
 
@@ -9,25 +10,15 @@ import type { Operation } from '../../../shared/types.js'
  *   GET  /api/operations?limit=200&kolId=...&status=...
  *   PUT  /api/operations/:id/status   { status, reason? }
  *
- * GET returns newest-first with status-change events folded in. PUT lets
- * the dashboard's approve/reject buttons advance an operation through its
- * state machine — currently only `pending → approved | rejected` is
- * accepted; broker-side transitions (executed / failed) come from the
- * engine, not from the dashboard.
+ * GET returns newest-first with status-change events folded in. PUT
+ * delegates to ApprovalService.transition so the dashboard, the Telegram
+ * bot, and any future surfaces share the same validation + persistence
+ * + event-emission logic.
  */
-
-type DashboardTransition = 'approved' | 'rejected'
-
-const ALLOWED_TRANSITIONS: Record<Operation['status'], DashboardTransition[]> = {
-  pending: ['approved', 'rejected'],
-  approved: [],
-  rejected: [],
-  executed: [],
-  failed: [],
-}
 
 export function createOperationsRoutes(
   store: IOperationStore,
+  approvals: ApprovalService,
   events: EventLog,
 ) {
   return new Hono()
@@ -69,45 +60,54 @@ export function createOperationsRoutes(
           400,
         )
       }
-      const newStatus: DashboardTransition = body.status
       const reason = typeof body.reason === 'string' ? body.reason : undefined
 
-      // Find the current operation. readAllOperations folds prior changes,
-      // so what we see here IS the current view.
-      const all = await store.readAllOperations()
-      const current = all.find((op) => op.id === id)
-      if (!current) return c.json({ error: 'operation not found' }, 404)
-
-      const allowed = ALLOWED_TRANSITIONS[current.status]
-      if (!allowed.includes(newStatus)) {
-        return c.json(
-          {
-            error: `cannot transition from ${current.status} to ${newStatus}`,
-            currentStatus: current.status,
-          },
-          409,
-        )
-      }
-
-      const at = new Date().toISOString()
-      await store.appendStatusChange({
+      const result = await approvals.transition({
         operationId: id,
-        newStatus,
-        at,
+        newStatus: body.status,
         by: 'dashboard',
         ...(reason !== undefined && { reason }),
       })
 
-      await events.append('operation.status-changed', {
-        operationId: id,
-        from: current.status,
-        to: newStatus,
-        by: 'dashboard',
-        at,
-        reason,
+      if (!result.ok) {
+        if (result.code === 'not-found') {
+          return c.json({ error: 'operation not found' }, 404)
+        }
+        return c.json(
+          {
+            error: `cannot transition from ${result.currentStatus} to ${body.status}`,
+            currentStatus: result.currentStatus,
+          },
+          409,
+        )
+      }
+      return c.json({ operation: result.operation })
+    })
+    .post('/:id/resend-card', async (c) => {
+      // Admin / recovery tool. Re-emits `operation.created` for an existing
+      // pending op so the Telegram notifier resends the approval card —
+      // useful if the bot was offline when the operation was first created,
+      // or for smoke-testing the notifier without going through the full
+      // signal → sizer pipeline. Only applies to pending ops; emitting for
+      // an already-decided op would just generate a no-op event.
+      const id = c.req.param('id')
+      const all = await store.readAllOperations()
+      const op = all.find((o) => o.id === id)
+      if (!op) return c.json({ error: 'operation not found' }, 404)
+      if (op.status !== 'pending') {
+        return c.json(
+          { error: `op is ${op.status}, not pending — nothing to resend` },
+          409,
+        )
+      }
+      await events.append('operation.created', {
+        operationId: op.id,
+        signalId: op.signalId,
+        kolId: op.kolId,
+        accountId: op.accountId,
+        status: op.status,
+        symbol: op.spec.action === 'placeOrder' ? op.spec.symbol : '(other)',
       })
-
-      const updated: Operation = { ...current, status: newStatus }
-      return c.json({ operation: updated })
+      return c.json({ ok: true })
     })
 }

@@ -51,6 +51,12 @@ import { ResultRouter } from './domain/signals/routing/result-router.js'
 import { CopyTradingEngine } from './domain/copy-trading/engine.js'
 import type { IOperationStore } from './domain/copy-trading/operation-store.js'
 import { OperationStore } from './domain/copy-trading/operation-store.js'
+import { ApprovalService } from './domain/copy-trading/approval/approval-service.js'
+import { ApprovalTimeouts } from './domain/copy-trading/approval/approval-timeouts.js'
+import { loadTelegramConfig } from './core/telegram-config.js'
+import { TelegramClient } from './connectors/telegram/client.js'
+import { TelegramNotifier } from './connectors/telegram/notifier.js'
+import { TelegramListener } from './connectors/telegram/listener.js'
 import { SnapshotService } from './domain/copy-trading/snapshot-service.js'
 import { DEFAULT_GUARD_CONFIGS, resolveGuards } from './domain/copy-trading/guards/registry.js'
 import { readTradingAccountsConfig } from './domain/trading/config-store.js'
@@ -92,6 +98,13 @@ export interface SignalPipeline {
    * pipeline uses.
    */
   eventLog: EventLog
+
+  /**
+   * Shared status-transition service. Wired into HTTP routes so the
+   * dashboard PUT and the Telegram callback both push transitions through
+   * one validation + persistence path.
+   */
+  approvalService: ApprovalService
 }
 
 /**
@@ -228,6 +241,52 @@ export async function createPipeline(deps: PipelineDeps = {}): Promise<SignalPip
     'Pipeline: copy-trading engine ready',
   )
 
+  // ── 7b. Approval service — shared by routes, telegram, and timeouts
+  const approvalService = new ApprovalService(operationStore, eventLog)
+
+  // ── 7c. Telegram approval surface — best-effort. If config is missing
+  // or the bot can't be reached, the rest of the pipeline still runs and
+  // the dashboard remains the only approval surface.
+  const telegramConfig = await loadTelegramConfig()
+  let telegramNotifier: TelegramNotifier | null = null
+  let telegramListener: TelegramListener | null = null
+  if (telegramConfig.enabled && telegramConfig.botToken && telegramConfig.chatId !== 0) {
+    const tgClient = new TelegramClient({ botToken: telegramConfig.botToken })
+    telegramNotifier = new TelegramNotifier({
+      client: tgClient,
+      chatId: telegramConfig.chatId,
+      events: eventLog,
+      store: operationStore,
+      kolRegistry,
+    })
+    telegramListener = new TelegramListener({
+      client: tgClient,
+      chatId: telegramConfig.chatId,
+      approvals: approvalService,
+    })
+    await telegramNotifier.start()
+    await telegramListener.start()
+    logger.info(
+      { chatId: telegramConfig.chatId, timeoutSeconds: telegramConfig.approvalTimeoutSeconds },
+      'Pipeline: Telegram approval surface enabled',
+    )
+  } else {
+    logger.warn(
+      'Pipeline: Telegram approval surface disabled (missing token/chatId or enabled=false). Dashboard remains the sole approval surface.',
+    )
+  }
+
+  // ── 7d. Auto-reject pending operations after approvalTimeoutSeconds
+  // Runs even when Telegram is off — the timeout is a business rule, not
+  // a connector concern.
+  const approvalTimeouts = new ApprovalTimeouts({
+    store: operationStore,
+    events: eventLog,
+    approvals: approvalService,
+    timeoutSeconds: telegramConfig.approvalTimeoutSeconds,
+  })
+  await approvalTimeouts.start()
+
   // ── 8. Result router (linker + index + store + events + copy-trading hook)
   const linker = new UpdateLinker([
     new ByExternalIdStrategy(),
@@ -356,6 +415,9 @@ export async function createPipeline(deps: PipelineDeps = {}): Promise<SignalPip
     async shutdown(): Promise<void> {
       logger.info('Pipeline: flushing in-flight bundles…')
       await aggregator.flushAll()
+      await approvalTimeouts.stop()
+      if (telegramListener) await telegramListener.stop()
+      if (telegramNotifier) await telegramNotifier.stop()
       await snapshotService.stop()
       await eventLog.close()
       kolRegistry.close()
@@ -363,6 +425,7 @@ export async function createPipeline(deps: PipelineDeps = {}): Promise<SignalPip
 
     operationStore,
     eventLog,
+    approvalService,
   }
 }
 

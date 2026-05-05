@@ -328,6 +328,46 @@ export const llmConfigApi = {
     }),
 };
 
+// ==================== Telegram Config API ====================
+
+export interface PublicTelegramConfig {
+  enabled: boolean;
+  chatId: number;
+  approvalTimeoutSeconds: number;
+  botTokenConfigured: boolean;
+  botTokenLast4: string;
+}
+
+export interface TelegramConfigUpdate {
+  enabled?: boolean;
+  chatId?: number;
+  approvalTimeoutSeconds?: number;
+  botToken?: string;
+}
+
+export type TelegramTestResult =
+  | {
+      ok: true;
+      botUsername: string;
+      chatId: number;
+      latencyMs: number;
+    }
+  | { ok: false; error: string };
+
+export const telegramConfigApi = {
+  get: () => api<PublicTelegramConfig>("/config/telegram"),
+  update: (data: TelegramConfigUpdate) =>
+    api<PublicTelegramConfig>("/config/telegram", {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+  test: (data: TelegramConfigUpdate) =>
+    api<TelegramTestResult>("/config/telegram/test", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+};
+
 // ==================== Pipeline (dev tool) API ====================
 
 export interface InjectResult {

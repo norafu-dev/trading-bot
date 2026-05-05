@@ -15,6 +15,7 @@ import { createPipelineRoutes } from './routes/pipeline.js'
 import { createMarketRoutes } from './routes/market.js'
 import { createOperationsRoutes } from './routes/operations.js'
 import { createRiskConfigRoutes } from './routes/risk-config.js'
+import { createTelegramConfigRoutes } from './routes/telegram-config.js'
 import { CcxtPriceService } from './connectors/market/price-service.js'
 import { ImageFetcher } from './connectors/discord/image-fetcher.js'
 import { createPipeline } from './pipeline.js'
@@ -85,8 +86,9 @@ app.route('/api/events', createEventRoutes())
 app.route('/api/config/llm', createLlmConfigRoutes())
 app.route('/api/pipeline', createPipelineRoutes(pipeline, messageStore))
 app.route('/api/market', createMarketRoutes(priceService))
-app.route('/api/operations', createOperationsRoutes(pipeline.operationStore, pipeline.eventLog))
+app.route('/api/operations', createOperationsRoutes(pipeline.operationStore, pipeline.approvalService, pipeline.eventLog))
 app.route('/api/config/risk', createRiskConfigRoutes())
+app.route('/api/config/telegram', createTelegramConfigRoutes())
 
 serve({ fetch: app.fetch, port: PORT }, (info) => {
   console.log(`[Signal] Server running on http://localhost:${info.port}`)
