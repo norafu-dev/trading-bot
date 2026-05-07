@@ -7,6 +7,9 @@ import type { CreateChannel, UpdateChannel } from "@/lib/api";
 import { Modal } from "../components/modal";
 import { GroupCombobox } from "@/components/ui/group-combobox";
 
+type SortKey = "enabled" | null;
+type SortDir = "asc" | "desc";
+
 export default function ChannelsPage() {
   const [channels, setChannels] = useState<ChannelConfig[]>([]);
   const [kols, setKols] = useState<KolConfig[]>([]);
@@ -14,6 +17,21 @@ export default function ChannelsPage() {
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<ChannelConfig | null>(null);
   const [showModal, setShowModal] = useState(false);
+  // null = original config order; click 启用 header to toggle asc/desc.
+  const [sortKey, setSortKey] = useState<SortKey>(null);
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
+
+  function handleSortClick(key: NonNullable<SortKey>) {
+    if (sortKey === key) {
+      // Three-state cycle so users can return to original order:
+      //   off → desc → asc → off
+      if (sortDir === "desc") setSortDir("asc");
+      else { setSortKey(null); setSortDir("desc"); }
+    } else {
+      setSortKey(key);
+      setSortDir("desc");
+    }
+  }
 
   const refresh = useCallback(async () => {
     try {
@@ -56,6 +74,16 @@ export default function ChannelsPage() {
   const kolMap = new Map(kols.map((k) => [k.id, k.label]));
   const channelMap = new Map(channels.map((c) => [c.id, c.label]));
 
+  // Apply sort without mutating channels (keeps file order as the off state).
+  const displayChannels = sortKey === null
+    ? channels
+    : [...channels].sort((a, b) => {
+        // enabled is the only sortable key right now; trues group first when desc.
+        const av = a.enabled ? 1 : 0;
+        const bv = b.enabled ? 1 : 0;
+        return sortDir === "desc" ? bv - av : av - bv;
+      });
+
   return (
     <div className="p-8">
       <div className="flex items-center justify-between">
@@ -81,7 +109,18 @@ export default function ChannelsPage() {
               <th className="px-4 py-3 font-medium">{"\u5206\u7ec4"}</th>
               <th className="px-4 py-3 font-medium">Channel ID</th>
               <th className="px-4 py-3 font-medium">Guild ID</th>
-              <th className="px-4 py-3 font-medium text-center">{"\u542f\u7528"}</th>
+              <th
+                className="px-4 py-3 font-medium text-center cursor-pointer select-none hover:text-foreground transition-colors"
+                onClick={() => handleSortClick("enabled")}
+                title={"\u70b9\u51fb\u5207\u6362\u6392\u5e8f\uff1a\u539f\u987a\u5e8f / \u542f\u7528\u4f18\u5148 / \u7981\u7528\u4f18\u5148"}
+              >
+                <span className="inline-flex items-center gap-1">
+                  {"\u542f\u7528"}
+                  {sortKey === "enabled"
+                    ? <span className="text-primary text-xs">{sortDir === "desc" ? "\u25bc" : "\u25b2"}</span>
+                    : <span className="opacity-30 text-xs">\u2195</span>}
+                </span>
+              </th>
               <th className="px-4 py-3 font-medium">{"\u5173\u8054 KOL"}</th>
               <th className="px-4 py-3 font-medium">{"\u5173\u8054\u9891\u9053"}</th>
               <th className="px-4 py-3 font-medium text-center">{"\u89e3\u6790\u5168\u90e8"}</th>
@@ -95,7 +134,7 @@ export default function ChannelsPage() {
             {!loading && channels.length === 0 && (
               <tr><td colSpan={9} className="px-4 py-8 text-center text-muted-foreground">{"\u6682\u65e0\u9891\u9053\uff0c\u70b9\u51fb\u53f3\u4e0a\u89d2\u6dfb\u52a0"}</td></tr>
             )}
-            {channels.map((ch) => (
+            {displayChannels.map((ch) => (
               <tr key={ch.id} className="border-b border-border last:border-0 transition-colors hover:bg-muted/40">
                 <td className="px-4 py-3 font-medium">{ch.label}</td>
                 <td className="px-4 py-3 text-xs text-muted-foreground">

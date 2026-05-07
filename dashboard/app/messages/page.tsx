@@ -186,7 +186,11 @@ export default function MessagesPage() {
   }, [refresh]);
 
   useEffect(() => {
-    if (shouldScroll.current) feedEnd.current?.scrollIntoView({ behavior: "smooth" });
+    // Jump straight to the bottom when new messages arrive while the user is
+    // already near the bottom — no smooth animation. The 3-second poll would
+    // make a long animation feel like the page is constantly drifting; an
+    // instant jump matches what Discord and Telegram do natively.
+    if (shouldScroll.current) feedEnd.current?.scrollIntoView({ behavior: "auto" });
   }, [messages]);
 
   function handleScroll(e: React.UIEvent<HTMLDivElement>) {
