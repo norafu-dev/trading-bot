@@ -32,6 +32,9 @@ Thumbs.db
 .vscode/
 .idea/
 
+# Claude Code 本地状态（每台机器独立的运行时数据，不应入仓）
+.claude/
+
 # 账户配置
 data/
 
