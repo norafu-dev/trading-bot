@@ -102,6 +102,32 @@ export default function OperationsPage() {
     return c;
   }, [operations]);
 
+  // "Today" snapshot — newest-first list lets us short-circuit the prefix.
+  // Approval rate = (approved + executed) / total decided today, ignoring
+  // still-pending ops since they haven't been decided yet.
+  const todayStats = useMemo(() => {
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const startIso = todayStart.toISOString();
+    const today = operations.filter((op) => op.createdAt >= startIso);
+    const decided = today.filter((op) => op.status !== "pending").length;
+    const approved = today.filter((op) => op.status === "approved" || op.status === "executed").length;
+    return {
+      total: today.length,
+      decided,
+      approveRate: decided > 0 ? Math.round((100 * approved) / decided) : null,
+    };
+  }, [operations]);
+
+  // Oldest still-pending op — surfaces "you have a 4-minute-old approval
+  // sitting unattended" risk before it auto-rejects.
+  const oldestPending = useMemo(() => {
+    const pending = operations.filter((op) => op.status === "pending");
+    if (pending.length === 0) return null;
+    // newest-first list → walk to the end of the pending block to get oldest
+    return pending[pending.length - 1];
+  }, [operations]);
+
   return (
     <div className="p-8">
       <div className="flex items-start justify-between gap-4">
@@ -137,15 +163,49 @@ export default function OperationsPage() {
         </div>
       </div>
 
-      {/* Status summary chips */}
-      <div className="mt-3 flex flex-wrap gap-2">
+      {/* ── Today's overview ───────────────────────────────────────── */}
+      <div className="mt-4 grid gap-3 sm:grid-cols-4">
+        <DashStat label="今日操作" value={todayStats.total} />
+        <DashStat
+          label="今日通过率"
+          value={todayStats.approveRate === null ? "—" : `${todayStats.approveRate}%`}
+          sub={`${todayStats.decided}/${todayStats.total} 已决策`}
+        />
+        <DashStat
+          label="待审批"
+          value={statusCounts.pending ?? 0}
+          tone={(statusCounts.pending ?? 0) > 0 ? "warn" : undefined}
+          sub={oldestPending ? `最早 ${formatTime(oldestPending.createdAt)}` : undefined}
+        />
+        <DashStat label="已执行" value={statusCounts.executed ?? 0} tone="good" />
+      </div>
+
+      {/* ── Status filter chips (clickable to filter the list) ─────── */}
+      <div className="mt-4 flex flex-wrap gap-1.5">
+        <button
+          onClick={() => setFilterStatus("")}
+          className={`rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${
+            filterStatus === ""
+              ? "border-primary bg-primary/15 text-primary"
+              : "border-border bg-card text-muted-foreground hover:bg-muted hover:text-foreground"
+          }`}
+        >
+          全部 <span className="ml-1 font-mono opacity-70">{operations.length}</span>
+        </button>
         {(["pending", "approved", "rejected", "executed", "failed"] as Operation["status"][]).map((s) => {
           const n = statusCounts[s] ?? 0;
-          if (n === 0) return null;
+          const active = filterStatus === s;
           return (
-            <span key={s} className={`rounded-md border px-2 py-0.5 text-xs ${STATUS_TONE[s]}`}>
-              {STATUS_LABEL[s]} <span className="font-mono opacity-70">{n}</span>
-            </span>
+            <button
+              key={s}
+              onClick={() => setFilterStatus(active ? "" : s)}
+              className={`rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${
+                active ? STATUS_TONE[s] : "border-border bg-card text-muted-foreground hover:bg-muted hover:text-foreground"
+              }`}
+            >
+              {STATUS_LABEL[s]}
+              <span className="ml-1 font-mono opacity-70">{n}</span>
+            </button>
           );
         })}
       </div>
@@ -349,6 +409,38 @@ function OperationCard({ op, kol, onChanged }: { op: Operation; kol?: KolConfig;
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Big-number metric tile shown in the top-of-page overview row.
+ * `tone` flags the visual urgency: warn = "the operator should pay
+ * attention" (typically pending > 0 with no auto-progress); good =
+ * "execution is happening as expected".
+ */
+function DashStat({
+  label,
+  value,
+  sub,
+  tone,
+}: {
+  label: string;
+  value: number | string;
+  sub?: string;
+  tone?: "warn" | "good";
+}) {
+  const toneClass =
+    tone === "warn"
+      ? "border-amber-500/40 bg-amber-500/5"
+      : tone === "good"
+      ? "border-green-500/40 bg-green-500/5"
+      : "border-border bg-card";
+  return (
+    <div className={`rounded-xl border p-4 shadow-sm ${toneClass}`}>
+      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</div>
+      <div className="mt-1 text-2xl font-bold">{value}</div>
+      {sub && <div className="mt-0.5 text-[11px] text-muted-foreground">{sub}</div>}
     </div>
   );
 }

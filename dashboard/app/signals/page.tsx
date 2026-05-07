@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { KolConfig, ParserType, PositionUpdate, Signal } from "@shared/types";
-import { kolApi, signalApi } from "@/lib/api";
+import type { KolConfig, Operation, ParserType, PositionUpdate, Signal } from "@shared/types";
+import { kolApi, operationApi, signalApi } from "@/lib/api";
 import type { SignalRecord } from "@/lib/api";
 
 // ==================== Constants ====================
@@ -84,19 +84,22 @@ export default function SignalsPage() {
   const [records, setRecords] = useState<SignalRecord[]>([]);
   const [total, setTotal] = useState(0);
   const [kols, setKols] = useState<KolConfig[]>([]);
+  const [operations, setOperations] = useState<Operation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filterKolId, setFilterKolId] = useState<string>("");
 
   const refresh = useCallback(async () => {
     try {
-      const [{ records: rs, total: t }, ks] = await Promise.all([
+      const [{ records: rs, total: t }, ks, { operations: ops }] = await Promise.all([
         signalApi.list({ limit: 200, kolId: filterKolId || undefined }),
         kolApi.list(),
+        operationApi.list({ limit: 500, ...(filterKolId && { kolId: filterKolId }) }),
       ]);
       setRecords(rs);
       setTotal(t);
       setKols(ks);
+      setOperations(ops);
       setError(null);
     } catch (e) {
       setError((e as Error).message);
@@ -116,6 +119,15 @@ export default function SignalsPage() {
     for (const k of kols) m.set(k.id, k);
     return m;
   }, [kols]);
+
+  // signalId → Operation it produced. A signal may produce 0 ops (filtered
+  // out before the engine reached it) or 1 op (the normal path); we don't
+  // currently fan-out to multiple ops per signal.
+  const opBySignalId = useMemo(() => {
+    const m = new Map<string, Operation>();
+    for (const op of operations) m.set(op.signalId, op);
+    return m;
+  }, [operations]);
 
   // Stats by kind
   const stats = useMemo(() => {
@@ -187,7 +199,12 @@ export default function SignalsPage() {
         <div className="mt-6 space-y-3">
           {records.map((r) =>
             r.kind === "signal" ? (
-              <SignalCard key={r.record.id} signal={r.record} kol={kolMap.get(r.record.kolId)} />
+              <SignalCard
+                key={r.record.id}
+                signal={r.record}
+                kol={kolMap.get(r.record.kolId)}
+                op={opBySignalId.get(r.record.id)}
+              />
             ) : (
               <UpdateCard key={r.record.id} update={r.record} kol={kolMap.get(r.record.kolId)} />
             ),
@@ -200,7 +217,7 @@ export default function SignalsPage() {
 
 // ==================== Cards ====================
 
-function SignalCard({ signal, kol }: { signal: Signal; kol?: KolConfig }) {
+function SignalCard({ signal, kol, op }: { signal: Signal; kol?: KolConfig; op?: Operation }) {
   const [showRaw, setShowRaw] = useState(false);
   const sideTone =
     signal.side === "long" ? "text-green-400" :
@@ -219,6 +236,7 @@ function SignalCard({ signal, kol }: { signal: Signal; kol?: KolConfig }) {
             <span className={`inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide ${parser.className}`}>
               {parser.label}
             </span>
+            <DownstreamBadge op={op} />
             <span className="ml-auto text-[10px] uppercase tracking-wide text-muted-foreground">
               📈 信号
             </span>
@@ -450,6 +468,50 @@ function PriceCheckBar({ check }: { check: NonNullable<Signal["priceCheck"]> }) 
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Compact tag showing whether a signal made it through to a downstream
+ * Operation. Three states:
+ *   - no op found            → "→ 未跟单" (signal did not reach the engine,
+ *                                possibly filtered before sizing)
+ *   - op present, rejected   → "→ 守卫拒绝: <name>" (which guard fired)
+ *   - op present, alive      → "→ <chinese status>" (pending/approved/etc)
+ */
+function DownstreamBadge({ op }: { op?: Operation }) {
+  if (!op) {
+    return (
+      <span
+        className="inline-flex items-center rounded-md border border-dashed border-border px-1.5 py-0.5 text-[10px] text-muted-foreground"
+        title="此信号未产生 Operation（可能被丢弃或解析前已被过滤）"
+      >
+        → 未跟单
+      </span>
+    );
+  }
+  // Status-driven color and label.
+  const statusMap: Record<Operation["status"], { label: string; cls: string }> = {
+    pending: { label: "待审批", cls: "border-amber-500/40 bg-amber-500/10 text-amber-400" },
+    approved: { label: "已批准", cls: "border-blue-500/40 bg-blue-500/10 text-blue-400" },
+    rejected: { label: "已拒绝", cls: "border-red-500/40 bg-red-500/10 text-red-400" },
+    executed: { label: "已执行", cls: "border-green-500/40 bg-green-500/10 text-green-400" },
+    failed: { label: "执行失败", cls: "border-red-500/40 bg-red-500/10 text-red-400" },
+  };
+  const s = statusMap[op.status];
+  // For rejected by guard, surface which one — this is the most diagnostic
+  // bit of information the dashboard can show without an extra click.
+  const reason = op.guardRejection?.guardName;
+  return (
+    <span
+      className={`inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${s.cls}`}
+      title={op.guardRejection?.reason ?? `Operation ${op.id.slice(-8)}`}
+    >
+      → {s.label}
+      {reason && op.status === "rejected" && (
+        <span className="ml-1 opacity-70">[{reason}]</span>
+      )}
+    </span>
   );
 }
 

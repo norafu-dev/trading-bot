@@ -9,7 +9,16 @@ import type { EventEntry } from "@/lib/api";
 
 const POLL_MS = 3_000;
 
+// Color encoding by event domain so an at-a-glance scan groups visually:
+//   green  = signal layer (positive: a signal got parsed)
+//   blue   = signal-linking layer (an update found its parent signal)
+//   amber  = signal-layer warnings (orphan updates, deliberate discards)
+//   red    = failure (parse errors, broker rejects)
+//   purple = operation layer (sizer + guards)
+//   teal   = trade execution layer (broker round-trip)
+//   muted  = informational / sync
 const TYPE_META: Record<string, { label: string; className: string; icon: string }> = {
+  // ── Signal layer ─────────────────────────────────────────────────
   "signal.parsed": {
     label: "signal.parsed",
     className: "bg-green-500/15 text-green-400 border-green-500/30",
@@ -35,15 +44,43 @@ const TYPE_META: Record<string, { label: string; className: string; icon: string
     className: "bg-red-500/15 text-red-400 border-red-500/30",
     icon: "❌",
   },
+  // ── Operation layer ──────────────────────────────────────────────
+  "operation.created": {
+    label: "operation.created",
+    className: "bg-purple-500/15 text-purple-400 border-purple-500/30",
+    icon: "⚙️",
+  },
+  "operation.status-changed": {
+    label: "operation.status-changed",
+    className: "bg-purple-500/10 text-purple-300 border-purple-500/20",
+    icon: "↻",
+  },
+  // ── Execution layer ──────────────────────────────────────────────
+  "trade.executed": {
+    label: "trade.executed",
+    className: "bg-teal-500/15 text-teal-400 border-teal-500/30",
+    icon: "🟢",
+  },
+  "trade.failed": {
+    label: "trade.failed",
+    className: "bg-red-500/15 text-red-400 border-red-500/30",
+    icon: "⚠️",
+  },
 };
 
+// Filters grouped by stage so users can think "show me only the
+// approval / execution layer" rather than picking individual event names.
 const TYPE_FILTER_OPTIONS = [
   { value: "", label: "全部" },
-  { value: "signal.parsed", label: "信号" },
-  { value: "update.linked", label: "关联成功" },
-  { value: "update.unlinked", label: "未关联" },
-  { value: "parse.discarded", label: "丢弃" },
-  { value: "parse.failed", label: "失败" },
+  { value: "signal.parsed", label: "📈 信号" },
+  { value: "update.linked", label: "🎯 关联" },
+  { value: "update.unlinked", label: "⚠️ 未关联" },
+  { value: "parse.discarded", label: "— 丢弃" },
+  { value: "parse.failed", label: "❌ 解析失败" },
+  { value: "operation.created", label: "⚙️ 新操作" },
+  { value: "operation.status-changed", label: "↻ 状态变更" },
+  { value: "trade.executed", label: "🟢 已执行" },
+  { value: "trade.failed", label: "⚠️ 执行失败" },
 ];
 
 // ==================== Helpers ====================
@@ -299,6 +336,56 @@ function renderSummary(entry: EventEntry, _kolLabel?: string): string {
         code && `[${code}]`,
         retriable !== undefined && (retriable ? "可重试" : "永久失败"),
         msg,
+      ].filter(Boolean).join("  ");
+    }
+    case "operation.created": {
+      const symbol = p.symbol as string | undefined;
+      const status = p.status as string | undefined;
+      const opId = p.operationId as string | undefined;
+      const rejection = p.rejection as { guardName?: string; reason?: string } | undefined;
+      return [
+        symbol,
+        status && `[${status}]`,
+        rejection?.guardName && `❌ ${rejection.guardName}`,
+        rejection?.reason,
+        opId && `id=${opId.slice(-8)}`,
+      ].filter(Boolean).join("  ");
+    }
+    case "operation.status-changed": {
+      const from = p.from as string | undefined;
+      const to = p.to as string | undefined;
+      const by = p.by as string | undefined;
+      const reason = p.reason as string | undefined;
+      const opId = p.operationId as string | undefined;
+      return [
+        from && to && `${from} → ${to}`,
+        by && `by ${by}`,
+        reason && `· ${reason}`,
+        opId && `id=${opId.slice(-8)}`,
+      ].filter(Boolean).join("  ");
+    }
+    case "trade.executed": {
+      const symbol = p.symbol as string | undefined;
+      const mainOrderId = p.mainOrderId as string | undefined;
+      const refPrice = p.refPrice as string | undefined;
+      const amount = p.amount as string | undefined;
+      const extraTps = (p.extraTpOrderIds as unknown[] | undefined)?.length ?? 0;
+      return [
+        symbol,
+        amount && `qty=${amount}`,
+        refPrice && `@ ${refPrice}`,
+        extraTps > 0 && `+${extraTps} TP`,
+        mainOrderId && `order=${mainOrderId.slice(-12)}`,
+      ].filter(Boolean).join("  ");
+    }
+    case "trade.failed": {
+      const symbol = p.symbol as string | undefined;
+      const category = p.category as string | undefined;
+      const message = p.message as string | undefined;
+      return [
+        symbol,
+        category && `[${category}]`,
+        message,
       ].filter(Boolean).join("  ");
     }
     default:
