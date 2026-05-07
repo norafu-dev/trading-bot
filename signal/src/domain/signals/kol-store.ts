@@ -29,10 +29,14 @@ const parsingHintsSchema = z.object({
     .optional(),
 }).passthrough()
 
+// Nullable so PUT clients can explicitly null this field to clear an
+// existing override (i.e. "use the global pipeline default again").
+// Optional so create / partial-update bodies that don't touch this field
+// don't have to send it.
 const aggregatorOverridesSchema = z.object({
   idleTimeoutMs: z.number().int().positive().optional(),
   maxDurationMs: z.number().int().positive().optional(),
-}).optional()
+}).nullable().optional()
 
 export const kolConfigSchema = z.object({
   id: z.string().min(1),

@@ -34,6 +34,7 @@ export type FilterDropReason =
   | 'duplicate_message_id'  // DuplicateFilter: messageId seen within the rolling window
   | 'noise_empty'           // NoiseFilter: text is empty after stripping whitespace
   | 'noise_separator'       // NoiseFilter: text is only a separator line ("---", "===", etc.)
+  | 'noise_edit_notice'     // NoiseFilter: forwarder bot's "✏️ edited" re-post of an already-processed message
   | 'url_blocklisted'       // UrlBlocklistFilter: text contains a known ad/spam domain
   | 'not_a_create_event'    // EventTypeFilter: eventType is 'update', not 'create'
 

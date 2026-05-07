@@ -30,6 +30,26 @@ const CHINESE_TO_BASE: Record<string, string> = {
   柚子币: 'EOS',
 }
 
+/**
+ * Quote-asset aliases used by TradingView (and a few other UIs) that don't
+ * match the exchange ticker. We collapse them to their on-exchange equivalent
+ * so cooldown / position-tracking by symbol stays consistent regardless of
+ * how the KOL's chart engine spelled the quote currency.
+ */
+const QUOTE_ALIASES: Record<string, string> = {
+  // TradingView quote-name variants → canonical exchange ticker
+  TETHERUS: 'USDT',
+  TETHERUSD: 'USDT',
+  TETHER: 'USDT',
+  // Pass-through (already canonical)
+  USD: 'USD',
+  USDT: 'USDT',
+  USDC: 'USDC',
+  BTC: 'BTC',
+  ETH: 'ETH',
+  BNB: 'BNB',
+}
+
 const DEFAULT_QUOTE = 'USDT'
 
 export interface NormalizeResult {
@@ -52,7 +72,19 @@ export function normalizeSymbol(
   const contractType = opts.contractType ?? 'perpetual'
   const fallbackQuote = (opts.defaultQuote ?? DEFAULT_QUOTE).toUpperCase()
 
-  // 1. Already CCXT shape: "BTC/USDT" or "BTC/USDT:USDT"
+  // 1. TradingView-style "BASE / QUOTE" (spaced slash). LLM extractors
+  // sometimes OCR this off the chart header (e.g. "ZRO / TetherUS").
+  // Normalising it here keeps cooldown / position keys consistent with
+  // the canonical CCXT form everything else lands on.
+  const tvMatch = trimmed.match(/^([A-Za-z0-9]+)\s*\/\s*([A-Za-z][A-Za-z0-9 ]*?)\s*$/)
+  if (tvMatch && trimmed.includes(' ')) {
+    const base = tvMatch[1].toUpperCase()
+    const rawQuote = tvMatch[2].replace(/\s+/g, '').toUpperCase()
+    const quote = QUOTE_ALIASES[rawQuote] ?? rawQuote
+    return buildResult(base, quote, contractType)
+  }
+
+  // 2. Already CCXT shape: "BTC/USDT" or "BTC/USDT:USDT"
   const ccxtMatch = trimmed.match(/^([A-Za-z0-9]+)\/([A-Za-z0-9]+)(?::([A-Za-z0-9]+))?$/)
   if (ccxtMatch) {
     const base = ccxtMatch[1].toUpperCase()
@@ -69,16 +101,16 @@ export function normalizeSymbol(
     }
   }
 
-  // 2. Chinese name
+  // 3. Chinese name
   const cn = CHINESE_TO_BASE[trimmed]
   if (cn) {
     return buildResult(cn, fallbackQuote, contractType)
   }
 
-  // 3. Strip decorations: "$BTC", "#BTC", whitespace
+  // 4. Strip decorations: "$BTC", "#BTC", whitespace
   const stripped = trimmed.replace(/^[$#]/, '').toUpperCase()
 
-  // 4. Exchange-flat shape: "BTCUSDT", "ETHUSDT"
+  // 5. Exchange-flat shape: "BTCUSDT", "ETHUSDT"
   const flatMatch = stripped.match(/^([A-Z0-9]+?)(USDT|USDC|USD|BTC|ETH|BNB)$/)
   if (flatMatch && flatMatch[1].length >= 2) {
     const base = flatMatch[1]
@@ -86,7 +118,7 @@ export function normalizeSymbol(
     return buildResult(base, quote, contractType)
   }
 
-  // 5. Bare base symbol: "BTC", "HYPE", "GENIUS"
+  // 6. Bare base symbol: "BTC", "HYPE", "GENIUS"
   if (/^[A-Z0-9]{1,15}$/.test(stripped)) {
     return buildResult(stripped, fallbackQuote, contractType)
   }

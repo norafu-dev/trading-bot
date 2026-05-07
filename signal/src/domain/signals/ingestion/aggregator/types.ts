@@ -101,4 +101,15 @@ export interface IMessageAggregator {
    * Must be awaited during graceful shutdown to avoid losing in-flight data.
    */
   flushAll(): Promise<void>
+
+  /**
+   * Replace the per-KOL overrides at runtime. Used by the pipeline when
+   * `data/kols/kols.json` changes (KolRegistry watcher fires) so a
+   * dashboard edit takes effect on the next message without a process
+   * restart. Already-open windows keep their original timers — only
+   * windows opened AFTER this call use the new values.
+   */
+  updatePerKolOverrides(
+    overrides: NonNullable<AggregatorConfig['perKolOverrides']>,
+  ): void
 }

@@ -75,6 +75,17 @@ export class MessageAggregator implements IMessageAggregator {
     }
   }
 
+  updatePerKolOverrides(
+    overrides: NonNullable<AggregatorConfig['perKolOverrides']>,
+  ): void {
+    // Replace by reference; idleTimeoutFor / maxDurationFor read this map
+    // every time, so the next ingest() call picks up the new values.
+    // We deliberately don't reset already-open windows: their existing
+    // timers already fire on the OLD value, but mid-flight bundles
+    // shouldn't change behaviour mid-flight either.
+    this.config.perKolOverrides = overrides
+  }
+
   async flushAll(): Promise<void> {
     const keys = Array.from(this.windows.keys())
     await Promise.all(keys.map((k) => this.closeWindow(k, 'forced_flush')))

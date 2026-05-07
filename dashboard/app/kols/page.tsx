@@ -116,13 +116,21 @@ export default function KolsPage() {
 
   useEffect(() => { void refresh(); }, [refresh]);
 
-  async function handleSave(data: CreateKol, avatarFile?: File) {
+  async function handleSave(
+    data: Omit<CreateKol, "aggregatorOverrides"> & { aggregatorOverrides?: KolConfig["aggregatorOverrides"] | null },
+    avatarFile?: File,
+  ) {
     let savedKol: KolConfig;
     if (editing) {
       const { id: _id, ...rest } = data;
       savedKol = await kolApi.update(editing.id, rest as UpdateKol);
     } else {
-      savedKol = await kolApi.create(data);
+      // Creating a brand-new KOL — null is meaningless for create, drop it.
+      const createData =
+        data.aggregatorOverrides === null
+          ? (() => { const { aggregatorOverrides: _, ...r } = data; return r as CreateKol })()
+          : (data as CreateKol);
+      savedKol = await kolApi.create(createData);
     }
     if (avatarFile) await kolApi.uploadAvatar(savedKol.id, avatarFile);
     setShowModal(false);
@@ -295,9 +303,60 @@ const STRATEGY_OPTIONS: Array<{ value: ParserType | ""; label: string }> = [
   { value: "hybrid", label: "混合 — 先 Regex，失败兜底 LLM" },
 ];
 
+// ── Aggregator presets ──────────────────────────────────────────────────────
+//
+// Curated from a 30-day analysis of monitored channels: bot-flavoured KOLs
+// post one self-contained message per signal; humans posting image+caption
+// p95 around 75s; "reply + later edit notification" channels p95 around 270s.
+// "default" sends no override at all so the global pipeline values apply.
+
+type AggPresetKey = "default" | "bot" | "standard" | "slow" | "very-slow" | "custom";
+
+const AGGREGATOR_PRESETS: Record<
+  Exclude<AggPresetKey, "default" | "custom">,
+  { idleSec: number; maxSec: number; label: string; hint: string }
+> = {
+  bot: {
+    idleSec: 2,
+    maxSec: 10,
+    label: "Bot 每条独立",
+    hint: "高度结构化的机器人 KOL，每条消息一个完整动作（开仓/加仓/平仓）",
+  },
+  standard: {
+    idleSec: 90,
+    maxSec: 240,
+    label: "标准 (图 + caption)",
+    hint: "图先发、caption 后写。覆盖 95% 的混合发送节奏",
+  },
+  slow: {
+    idleSec: 120,
+    maxSec: 300,
+    label: "慢 (图 + 翻译)",
+    hint: "图 + 英文 + 翻译多段分发，写作较慢",
+  },
+  "very-slow": {
+    idleSec: 240,
+    maxSec: 360,
+    label: "超慢 (回复 + 编辑通知)",
+    hint: "频道有 reply / edit 通知 bot，消息间隔可达数分钟",
+  },
+};
+
+function matchPreset(idleSec?: number, maxSec?: number): AggPresetKey {
+  if (idleSec === undefined && maxSec === undefined) return "default";
+  for (const [key, p] of Object.entries(AGGREGATOR_PRESETS)) {
+    if (p.idleSec === idleSec && p.maxSec === maxSec) return key as AggPresetKey;
+  }
+  return "custom";
+}
+
+type KolFormPayload = Omit<CreateKol, "aggregatorOverrides"> & {
+  aggregatorOverrides?: KolConfig["aggregatorOverrides"] | null;
+};
+
 function KolForm({ initial, onSave, onCancel }: {
   initial: KolConfig | null;
-  onSave: (data: CreateKol, avatarFile?: File) => void;
+  onSave: (data: KolFormPayload, avatarFile?: File) => void;
   onCancel: () => void;
 }) {
   const [id, setId] = useState(initial?.id ?? "");
@@ -316,6 +375,23 @@ function KolForm({ initial, onSave, onCancel }: {
   );
   const [styleHint, setStyleHint] = useState(initial?.parsingHints?.style ?? "");
   const [imagePolicy, setImagePolicy] = useState(initial?.parsingHints?.imagePolicy ?? "optional");
+
+  // Aggregator overrides — see AGGREGATOR_PRESETS for the rationale behind
+  // each tier. Values stored in seconds for UX; converted to ms on save.
+  const initialAggIdleSec = initial?.aggregatorOverrides?.idleTimeoutMs
+    ? initial.aggregatorOverrides.idleTimeoutMs / 1000
+    : undefined;
+  const initialAggMaxSec = initial?.aggregatorOverrides?.maxDurationMs
+    ? initial.aggregatorOverrides.maxDurationMs / 1000
+    : undefined;
+  const initialAggPreset = matchPreset(initialAggIdleSec, initialAggMaxSec);
+  const [aggPreset, setAggPreset] = useState<AggPresetKey>(initialAggPreset);
+  const [aggIdleSec, setAggIdleSec] = useState(
+    initialAggIdleSec !== undefined ? String(initialAggIdleSec) : "",
+  );
+  const [aggMaxSec, setAggMaxSec] = useState(
+    initialAggMaxSec !== undefined ? String(initialAggMaxSec) : "",
+  );
 
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(
@@ -346,7 +422,36 @@ function KolForm({ initial, onSave, onCancel }: {
         }
       : undefined;
 
-    const payload: CreateKol = {
+    // Aggregator overrides decision tree:
+    //   - "default": if there was a prior override, emit `null` to clear it
+    //                on the server (PATCH-style PUT treats null as delete).
+    //                For brand-new KOLs (no `initial`) just omit the field.
+    //   - non-default preset: emit the preset's ms values
+    //   - "custom": emit only the fields the user filled in
+    let aggregatorOverrides: { idleTimeoutMs?: number; maxDurationMs?: number } | null | undefined;
+    if (aggPreset === "default") {
+      aggregatorOverrides = initial?.aggregatorOverrides ? null : undefined;
+    } else if (aggPreset === "custom") {
+      const idleMs = aggIdleSec ? Math.round(Number(aggIdleSec) * 1000) : undefined;
+      const maxMs = aggMaxSec ? Math.round(Number(aggMaxSec) * 1000) : undefined;
+      aggregatorOverrides =
+        (idleMs && idleMs > 0) || (maxMs && maxMs > 0)
+          ? {
+              ...(idleMs && idleMs > 0 ? { idleTimeoutMs: idleMs } : {}),
+              ...(maxMs && maxMs > 0 ? { maxDurationMs: maxMs } : {}),
+            }
+          : undefined;
+    } else {
+      const p = AGGREGATOR_PRESETS[aggPreset];
+      aggregatorOverrides = {
+        idleTimeoutMs: p.idleSec * 1000,
+        maxDurationMs: p.maxSec * 1000,
+      };
+    }
+
+    const payload: Omit<CreateKol, "aggregatorOverrides"> & {
+      aggregatorOverrides?: KolConfig["aggregatorOverrides"] | null;
+    } = {
       id,
       label,
       enabled,
@@ -358,6 +463,7 @@ function KolForm({ initial, onSave, onCancel }: {
       ...(needsRegex && regexConfigName ? { regexConfigName } : {}),
       ...(confidenceOverride !== "" ? { confidenceOverride: Number(confidenceOverride) } : {}),
       ...(mergedHints ? { parsingHints: mergedHints } : {}),
+      ...(aggregatorOverrides !== undefined ? { aggregatorOverrides } : {}),
     };
 
     onSave(payload, avatarFile ?? undefined);
@@ -530,6 +636,62 @@ function KolForm({ initial, onSave, onCancel }: {
               </p>
             </div>
           </>
+        )}
+      </div>
+
+      {/* Aggregator overrides */}
+      <div className="rounded-lg border border-border bg-muted/30 p-4 space-y-3">
+        <div>
+          <label className={labelClass}>消息聚合节奏</label>
+          <p className="text-[11px] text-muted-foreground mb-2">
+            控制 KOL 多条消息合并成一个信号包的等待时间。改完保存即时生效，无需重启。
+          </p>
+          <select
+            className={inputClass}
+            value={aggPreset}
+            onChange={(e) => setAggPreset(e.target.value as AggPresetKey)}
+          >
+            <option value="default">默认 (60s 静默 / 240s 上限)</option>
+            {Object.entries(AGGREGATOR_PRESETS).map(([key, p]) => (
+              <option key={key} value={key}>
+                {p.label} ({p.idleSec}s / {p.maxSec}s)
+              </option>
+            ))}
+            <option value="custom">自定义...</option>
+          </select>
+          {aggPreset !== "default" && aggPreset !== "custom" && (
+            <p className="mt-2 text-[11px] text-muted-foreground">
+              {AGGREGATOR_PRESETS[aggPreset].hint}
+            </p>
+          )}
+        </div>
+        {aggPreset === "custom" && (
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className={labelClass}>静默超时（秒）</label>
+              <input
+                type="number"
+                min="1"
+                step="1"
+                className={inputClass}
+                value={aggIdleSec}
+                onChange={(e) => setAggIdleSec(e.target.value)}
+                placeholder="留空用默认 60"
+              />
+            </div>
+            <div>
+              <label className={labelClass}>最大持续（秒）</label>
+              <input
+                type="number"
+                min="1"
+                step="1"
+                className={inputClass}
+                value={aggMaxSec}
+                onChange={(e) => setAggMaxSec(e.target.value)}
+                placeholder="留空用默认 240"
+              />
+            </div>
+          </div>
         )}
       </div>
 

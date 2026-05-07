@@ -33,7 +33,12 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 // ==================== KOL API ====================
 
 export type CreateKol = Omit<KolConfig, "addedAt">;
-export type UpdateKol = Partial<Omit<KolConfig, "id" | "addedAt">>;
+// `aggregatorOverrides: null` on update means "clear my override" — the
+// backend treats null as a delete signal so the global default takes over
+// for this KOL again. All other fields stay PATCH-style: omit = don't touch.
+export type UpdateKol = Omit<Partial<Omit<KolConfig, "id" | "addedAt">>, "aggregatorOverrides"> & {
+  aggregatorOverrides?: KolConfig["aggregatorOverrides"] | null;
+};
 
 export const kolApi = {
   list: () => api<KolConfig[]>("/kols"),

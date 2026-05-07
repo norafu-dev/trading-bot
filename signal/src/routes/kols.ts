@@ -48,7 +48,15 @@ export function createKolChannelRoutes(listener: DiscordListener | null) {
       if (kols.find((k) => k.id === parsed.data.id)) {
         return c.json({ error: `KOL "${parsed.data.id}" already exists` }, 409)
       }
-      const newKol = { ...parsed.data, addedAt: new Date().toISOString() }
+      // Schema accepts `aggregatorOverrides: null` to support PUT clears,
+      // but on create, null is meaningless — coerce to undefined so the
+      // stored record stays clean.
+      const { aggregatorOverrides, ...rest } = parsed.data
+      const newKol = {
+        ...rest,
+        ...(aggregatorOverrides ? { aggregatorOverrides } : {}),
+        addedAt: new Date().toISOString(),
+      }
       await writeKols([...kols, newKol])
       autoReload(listener)
       return c.json(newKol, 201)
@@ -73,11 +81,18 @@ export function createKolChannelRoutes(listener: DiscordListener | null) {
         incoming.parsingHints !== undefined
           ? { ...(existing.parsingHints ?? {}), ...incoming.parsingHints }
           : existing.parsingHints
-      kols[idx] = {
+      // `aggregatorOverrides: null` is the explicit "clear this field"
+      // signal — the merged record drops the property altogether so the
+      // pipeline falls back to its global default for this KOL.
+      const merged: Record<string, unknown> = {
         ...existing,
         ...incoming,
         ...(mergedHints !== undefined && { parsingHints: mergedHints }),
       }
+      if (incoming.aggregatorOverrides === null) {
+        delete merged.aggregatorOverrides
+      }
+      kols[idx] = merged as unknown as typeof existing
       await writeKols(kols)
       autoReload(listener)
       return c.json(kols[idx])

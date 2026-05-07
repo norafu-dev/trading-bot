@@ -146,6 +146,42 @@ describe('MessageAggregator — flushAll', () => {
   })
 })
 
+describe('MessageAggregator — runtime override updates', () => {
+  it('updatePerKolOverrides applies to next opened window', async () => {
+    const agg = new MessageAggregator({ idleTimeoutMs: 100, maxDurationMs: 10_000 })
+    const bundles: MessageBundle[] = []
+    agg.onBundleClosed(async (b) => { bundles.push(b) })
+
+    // Hot-reload: kol-slow gets a much longer idle timeout
+    agg.updatePerKolOverrides({ 'kol-slow': { idleTimeoutMs: 5_000 } })
+
+    await agg.ingest(makeMessage({ authorId: 'kol-slow' }))
+    // Default (100ms) would have fired by now — but slow override raised it
+    await vi.advanceTimersByTimeAsync(150)
+    expect(bundles).toHaveLength(0)
+
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(bundles).toHaveLength(1)
+  })
+
+  it('updatePerKolOverrides replaces, not merges', async () => {
+    const agg = new MessageAggregator({
+      idleTimeoutMs: 100,
+      maxDurationMs: 10_000,
+      perKolOverrides: { 'kol-a': { idleTimeoutMs: 5_000 } },
+    })
+    const bundles: MessageBundle[] = []
+    agg.onBundleClosed(async (b) => { bundles.push(b) })
+
+    // Replace with overrides for a DIFFERENT kol — kol-a now uses default again
+    agg.updatePerKolOverrides({ 'kol-b': { idleTimeoutMs: 5_000 } })
+
+    await agg.ingest(makeMessage({ authorId: 'kol-a' }))
+    await vi.advanceTimersByTimeAsync(150)
+    expect(bundles).toHaveLength(1)  // closed via default 100ms
+  })
+})
+
 describe('MessageAggregator — handler errors', () => {
   it('does not crash when an onBundleClosed handler throws', async () => {
     const agg = new MessageAggregator({ idleTimeoutMs: 100, maxDurationMs: 5000 })

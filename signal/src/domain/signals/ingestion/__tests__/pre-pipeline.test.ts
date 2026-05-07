@@ -139,6 +139,57 @@ describe('NoiseFilter', () => {
     expect(result.pass).toBe(true)
   })
 
+  it('drops Chinese edit-notice embed (✏️ 已编辑)', () => {
+    const result = filter.apply(
+      makeMessage({
+        content: '<@&12345>',
+        embeds: [{
+          fields: [],
+          description: '✏️ **已编辑**\n> 原消息: [#BTC Update ...](https://discord.com/channels/x/y/z)',
+        }],
+      }),
+      ctx,
+    )
+    expect(result.pass).toBe(false)
+    if (!result.pass) expect(result.reason).toBe('noise_edit_notice')
+  })
+
+  it('drops English edit-notice embed (✏️ edited)', () => {
+    const result = filter.apply(
+      makeMessage({
+        embeds: [{ fields: [], description: '✏️ **edited**\n> original: [...](https://x)' }],
+      }),
+      ctx,
+    )
+    expect(result.pass).toBe(false)
+  })
+
+  it('keeps a real signal embed even though it has the pencil emoji elsewhere', () => {
+    const result = filter.apply(
+      makeMessage({
+        embeds: [{
+          fields: [],
+          description: 'Long BTC at 94000, SL 92000, TP 96000 ✏️ updated thoughts below',
+        }],
+      }),
+      ctx,
+    )
+    expect(result.pass).toBe(true)
+  })
+
+  it('drops only when ALL embeds are edit notices (mixed → keep)', () => {
+    const result = filter.apply(
+      makeMessage({
+        embeds: [
+          { fields: [], description: '✏️ **已编辑**\n> 原消息: [...](https://x)' },
+          { fields: [{ name: 'Entry', value: '94000' }] },  // real signal embed
+        ],
+      }),
+      ctx,
+    )
+    expect(result.pass).toBe(true)
+  })
+
   it('passes an image-only message (no content, has attachments)', () => {
     const result = filter.apply(
       makeMessage({

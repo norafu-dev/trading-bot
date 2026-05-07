@@ -58,4 +58,34 @@ describe('normalizeSymbol', () => {
   it('handles long alphanumeric tickers (e.g. ASTEROIOD)', () => {
     expect(normalizeSymbol('ASTEROIOD')?.base).toBe('ASTEROIOD')
   })
+
+  // ── TradingView-style "BASE / QUOTE" (spaced slash, often OCR'd from
+  //    chart headers like "ZRO / TetherUS"). Must collapse to canonical CCXT.
+  it('handles TradingView-style "ZRO / TetherUS"', () => {
+    const r = normalizeSymbol('ZRO / TetherUS', { contractType: 'perpetual' })
+    expect(r).toEqual({ base: 'ZRO', quote: 'USDT', ccxtSymbol: 'ZRO/USDT:USDT' })
+  })
+
+  it('handles "BTC / Tether USD" with space inside the alias', () => {
+    const r = normalizeSymbol('BTC / Tether USD', { contractType: 'perpetual' })
+    expect(r?.ccxtSymbol).toBe('BTC/USDT:USDT')
+  })
+
+  it('handles TradingView spot form "ETH / USD"', () => {
+    const r = normalizeSymbol('ETH / USD', { contractType: 'spot' })
+    expect(r?.ccxtSymbol).toBe('ETH/USD')
+    expect(r?.quote).toBe('USD')
+  })
+
+  it('handles TradingView form with USDT quote unchanged', () => {
+    const r = normalizeSymbol('SOL / USDT', { contractType: 'perpetual' })
+    expect(r?.ccxtSymbol).toBe('SOL/USDT:USDT')
+  })
+
+  it('still treats compact "BTC/USDT" (no spaces) as CCXT shape, not TradingView', () => {
+    // Regression guard: we MUST keep step 2 reachable. The TradingView rule
+    // is gated on having whitespace; without spaces this is a CCXT input.
+    const r = normalizeSymbol('BTC/USDT', { contractType: 'perpetual' })
+    expect(r?.ccxtSymbol).toBe('BTC/USDT:USDT')
+  })
 })

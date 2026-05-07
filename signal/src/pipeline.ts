@@ -67,9 +67,16 @@ import { DEFAULT_GUARD_CONFIGS, resolveGuards } from './domain/copy-trading/guar
 import { readTradingAccountsConfig } from './domain/trading/config-store.js'
 
 // ── Aggregator defaults — override per-KOL via kols.json aggregatorOverrides ─
-
-const DEFAULT_IDLE_TIMEOUT_MS = 30_000
-const DEFAULT_MAX_DURATION_MS = 120_000
+//
+// Tuned from a 30-day analysis of three monitored channels (Apr–May 2026):
+//   - 95th-percentile intra-cluster gap across "real signal" clusters was
+//     ~75s for the most multi-message KOL (image + caption + zh translation).
+//   - 60s catches 94% of those signals as one bundle while keeping the
+//     dispatch latency budget under a minute.
+// Per-KOL overrides via KolConfig.aggregatorOverrides stretch this for
+// slow writers (Trader Cash style: reply + edit, p95 ≈ 270s).
+const DEFAULT_IDLE_TIMEOUT_MS = 60_000
+const DEFAULT_MAX_DURATION_MS = 240_000
 
 // ── Public surface ──────────────────────────────────────────────────────────
 
@@ -81,7 +88,7 @@ export interface SignalPipeline {
    * Force-close every open aggregator window immediately, dispatching their
    * bundles through the parser → router chain. Used by the "replay this
    * message" dev tool so the operator doesn't have to wait the full
-   * idleTimeoutMs (30s) to see results. Returns when all dispatches finish.
+   * idleTimeoutMs to see results. Returns when all dispatches finish.
    *
    * Unlike shutdown(), this leaves the EventLog handle and KolRegistry
    * watcher running — the pipeline keeps accepting new messages.
@@ -386,15 +393,17 @@ export async function createPipeline(deps: PipelineDeps = {}): Promise<SignalPip
     }
   })
 
-  // Hot-reload caveat: the MessageAggregator currently has no method to
-  // update its per-KOL overrides at runtime, so a kols.json change touching
-  // aggregatorOverrides only takes effect after a restart. We log it here
-  // so operators aren't surprised; an aggregator API for runtime updates
-  // can be added without touching this assembler.
+  // Hot-reload aggregator overrides on every kols.json change. The aggregator
+  // reads its perKolOverrides map every time it opens a window, so the very
+  // next message after a save uses the new value — no restart needed.
+  // Already-open windows keep their existing timers; that's fine because the
+  // window the operator just edited is unlikely to be open at the moment of
+  // the edit.
   kolRegistry.onChange((kolId) => {
+    aggregator.updatePerKolOverrides(collectAggregatorOverrides(kolRegistry))
     logger.info(
       { kolId },
-      'KolRegistry: KOL config changed (aggregator overrides apply on next restart)',
+      'KolRegistry: KOL config changed — aggregator overrides hot-reloaded',
     )
   })
 
