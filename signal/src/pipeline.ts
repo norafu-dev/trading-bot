@@ -42,6 +42,7 @@ import { LlmParser } from './domain/signals/parsing/llm/llm-parser.js'
 import { OpenRouterProvider } from './domain/signals/parsing/llm/provider/openrouter-provider.js'
 import { SessionLogger } from './domain/signals/parsing/llm/session-logger.js'
 import { RegexConfigRegistry } from './domain/signals/parsing/regex/config-registry.js'
+import { BTC_STAR_CONFIG } from './domain/signals/parsing/regex/configs/btc-star.js'
 import { RegexStructuredParser } from './domain/signals/parsing/regex/regex-parser.js'
 import { ParserRegistry } from './domain/signals/parsing/registry.js'
 import type { ILlmProvider, ISessionLogger } from './domain/signals/parsing/types.js'
@@ -171,10 +172,11 @@ export async function createPipeline(deps: PipelineDeps = {}): Promise<SignalPip
 
   // ── 4. Parser infrastructure
   const regexConfigRegistry = new RegexConfigRegistry()
-  // (No regex configs are registered yet — all current KOLs use llm_text.
-  //  When a bot-KOL is onboarded, register its config here, e.g.:
-  //    regexConfigRegistry.register(WG_BOT_CONFIG)
-  //  The dispatcher's healthCheck will then verify the registration.)
+  // Bot-format KOL configs. Each one corresponds to a single channel run
+  // by a specific bot (chain-tracker, bridge translator, etc). Add new
+  // ones here and the dispatcher's healthCheck will verify the matching
+  // KOL exists with parsingStrategy='regex_structured' and regexConfigName.
+  regexConfigRegistry.register(BTC_STAR_CONFIG)
 
   const parserRegistry = new ParserRegistry()
   const regexParser = new RegexStructuredParser(regexConfigRegistry)
