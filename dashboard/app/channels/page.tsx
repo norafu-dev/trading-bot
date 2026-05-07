@@ -118,7 +118,7 @@ export default function ChannelsPage() {
                   {"\u542f\u7528"}
                   {sortKey === "enabled"
                     ? <span className="text-primary text-xs">{sortDir === "desc" ? "\u25bc" : "\u25b2"}</span>
-                    : <span className="opacity-30 text-xs">\u2195</span>}
+                    : <span className="opacity-30 text-xs">{"\u2195"}</span>}
                 </span>
               </th>
               <th className="px-4 py-3 font-medium">{"\u5173\u8054 KOL"}</th>
