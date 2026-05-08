@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { KolConfig, ParserType } from "@shared/types";
 import { kolApi } from "@/lib/api";
 import type { CreateKol, UpdateKol } from "@/lib/api";
+import { authorColor } from "@/lib/utils";
 import { Modal } from "../components/modal";
 
 // ==================== Constants ====================
@@ -24,13 +25,6 @@ const STRATEGY_COLOR: Record<ParserType, string> = {
 };
 
 // ==================== Helpers ====================
-
-function authorColor(id: string): string {
-  const colors = ["#5865F2","#57F287","#FEE75C","#EB459E","#ED4245","#3BA55C","#F47B67","#9B59B6"];
-  let n = 0;
-  for (const c of id) n = (n * 31 + c.charCodeAt(0)) & 0xffff;
-  return colors[n % colors.length];
-}
 
 function KolAvatar({ kol, size = 64 }: { kol: Pick<KolConfig, "id" | "label" | "avatarPath">; size?: number }) {
   const [imgError, setImgError] = useState(false);

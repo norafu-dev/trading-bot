@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { KolConfig, Operation } from "@shared/types";
 import { kolApi, operationApi } from "@/lib/api";
+import { authorColor } from "@/lib/utils";
 
 const POLL_MS = 5_000;
 
@@ -22,12 +23,6 @@ const STATUS_LABEL: Record<Operation["status"], string> = {
   failed: "执行失败",
 };
 
-function authorColor(id: string): string {
-  const colors = ["#5865F2", "#57F287", "#FEE75C", "#EB459E", "#ED4245", "#3BA55C", "#F47B67", "#9B59B6"];
-  let n = 0;
-  for (const c of id) n = (n * 31 + c.charCodeAt(0)) & 0xffff;
-  return colors[n % colors.length];
-}
 
 function formatTime(iso: string): string {
   const d = new Date(iso);

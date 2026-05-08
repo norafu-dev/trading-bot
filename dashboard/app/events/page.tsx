@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { KolConfig } from "@shared/types";
 import { eventApi, kolApi } from "@/lib/api";
 import type { EventEntry } from "@/lib/api";
+import { authorColor } from "@/lib/utils";
 
 // ==================== Constants ====================
 
@@ -84,13 +85,6 @@ const TYPE_FILTER_OPTIONS = [
 ];
 
 // ==================== Helpers ====================
-
-function authorColor(id: string): string {
-  const colors = ["#5865F2","#57F287","#FEE75C","#EB459E","#ED4245","#3BA55C","#F47B67","#9B59B6"];
-  let n = 0;
-  for (const c of id) n = (n * 31 + c.charCodeAt(0)) & 0xffff;
-  return colors[n % colors.length];
-}
 
 function formatTime(ms: number): string {
   const d = new Date(ms);

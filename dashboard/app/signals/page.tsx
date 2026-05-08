@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { KolConfig, Operation, ParserType, PositionUpdate, Signal } from "@shared/types";
 import { kolApi, operationApi, signalApi } from "@/lib/api";
 import type { SignalRecord } from "@/lib/api";
+import { authorColor } from "@/lib/utils";
 
 // ==================== Constants ====================
 
@@ -29,13 +30,6 @@ const UPDATE_TYPE_LABEL: Record<PositionUpdate["updateType"], { text: string; to
 };
 
 // ==================== Helpers ====================
-
-function authorColor(id: string): string {
-  const colors = ["#5865F2", "#57F287", "#FEE75C", "#EB459E", "#ED4245", "#3BA55C", "#F47B67", "#9B59B6"];
-  let n = 0;
-  for (const c of id) n = (n * 31 + c.charCodeAt(0)) & 0xffff;
-  return colors[n % colors.length];
-}
 
 function formatTime(iso: string): string {
   const d = new Date(iso);
