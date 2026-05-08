@@ -62,13 +62,17 @@ export default function OperationsPage() {
   const [filterKolId, setFilterKolId] = useState<string>("");
   const [filterStatus, setFilterStatus] = useState<Operation["status"] | "">("");
 
+  // We deliberately DON'T pass `status` to the API. If the server-side
+  // filter is on, the chip-row counts collapse to the current filter
+  // (e.g. picking "已批准" makes 全部 say 1 and 已拒绝 say 0). Status
+  // filtering happens in-page; KOL filtering still goes to the server
+  // because that affects the meaningful "total in this KOL's history".
   const refresh = useCallback(async () => {
     try {
       const [{ operations: ops, total: t }, ks] = await Promise.all([
         operationApi.list({
           limit: 200,
           ...(filterKolId && { kolId: filterKolId }),
-          ...(filterStatus && { status: filterStatus }),
         }),
         kolApi.list(),
       ]);
@@ -81,7 +85,7 @@ export default function OperationsPage() {
     } finally {
       setLoading(false);
     }
-  }, [filterKolId, filterStatus]);
+  }, [filterKolId]);
 
   useEffect(() => {
     void refresh();
@@ -95,7 +99,16 @@ export default function OperationsPage() {
     return m;
   }, [kols]);
 
-  // Counts per status (current page only)
+  // Visible-list slice: applies status filter on top of the API response.
+  // The unfiltered `operations` array stays the source of truth for the
+  // chip counts so they don't collapse when a status is selected.
+  const visibleOperations = useMemo(
+    () => (filterStatus ? operations.filter((op) => op.status === filterStatus) : operations),
+    [operations, filterStatus],
+  );
+
+  // Status counts always come from the unfiltered (status-wise) array so
+  // every chip stays correct as you click through them.
   const statusCounts = useMemo(() => {
     const c: Record<string, number> = {};
     for (const op of operations) c[op.status] = (c[op.status] ?? 0) + 1;
@@ -134,7 +147,9 @@ export default function OperationsPage() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">运营操作流</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            最近 {operations.length} / {total} 条操作 · 由 PositionSizer + GuardPipeline 产生 · 每 {POLL_MS / 1000} 秒自动刷新
+            最近 {operations.length} / {total} 条操作
+            {filterStatus && ` · 当前筛选「${STATUS_LABEL[filterStatus]}」${visibleOperations.length} 条`}
+            {" · 每 "}{POLL_MS / 1000}{" 秒自动刷新"}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -225,9 +240,15 @@ export default function OperationsPage() {
         </div>
       )}
 
-      {!loading && operations.length > 0 && (
+      {!loading && operations.length > 0 && visibleOperations.length === 0 && (
+        <div className="mt-8 rounded-xl border border-dashed border-border bg-card/50 px-6 py-8 text-center text-sm text-muted-foreground">
+          当前筛选条件下没有操作 — 切换上方标签查看其它状态
+        </div>
+      )}
+
+      {!loading && visibleOperations.length > 0 && (
         <div className="mt-6 space-y-3">
-          {operations.map((op) => (
+          {visibleOperations.map((op) => (
             <OperationCard key={op.id} op={op} kol={kolMap.get(op.kolId)} onChanged={refresh} />
           ))}
         </div>
