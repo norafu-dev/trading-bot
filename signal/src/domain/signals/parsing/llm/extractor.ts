@@ -57,18 +57,22 @@ export class Extractor implements IExtractor {
       : built.messages
 
     // Layer-2 price hint: pre-fetch live prices for the most likely symbols
-    // detected in the bundle text, so the LLM can unit-normalise shorthand
-    // like "7.67" → 76700 when BTC trades in the tens of thousands.
-    // Only meaningful for signal extraction (updates inherit symbol from
-    // their parent signal). Failures degrade silently — extraction proceeds
-    // without the hint.
+    // detected in the bundle text + image, so the LLM can:
+    //   - unit-normalise shorthand like "7.67" → 76700 when BTC trades in
+    //     the tens of thousands (signal path)
+    //   - anchor a symbol value when extracting from a "TP1 hit!" + receipt
+    //     image where the symbol is buried in a chart card (update path).
+    //     Without this, updates lose their symbol → by-kol-symbol linker
+    //     can't find the parent → update gets discarded as unlinked even
+    //     when the source signal exists.
+    // Failures degrade silently — extraction proceeds without the hint.
     const quotes: PriceQuote[] = []
-    if (kind === 'signal' && ctx.priceService) {
+    if (ctx.priceService) {
       try {
         quotes.push(...(await fetchPriceHints(ctx.bundle, ctx.priceService, ctx.kol.defaultContractType)))
       } catch (err) {
         logger.debug(
-          { err, bundleId: ctx.bundle.id },
+          { err, bundleId: ctx.bundle.id, kind },
           'Extractor: price-hint pre-fetch failed; extracting without hint',
         )
       }

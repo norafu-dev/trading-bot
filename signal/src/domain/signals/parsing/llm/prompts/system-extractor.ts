@@ -64,12 +64,12 @@ other          — SENTINEL: cannot classify this update. Use only as a last res
 ## Field rules
 
 updateType           — Required. Pick the best-fitting value from the list above.
-symbol               — The symbol the update refers to, exactly as written ("BTC", "HUSDT"). Extract whenever the KOL names it; LinkStrategy uses this to find the original signal.
+symbol               — STRONGLY RECOMMENDED. The symbol the update refers to, exactly as written ("BTC", "HUSDT"). Extract from ANY part of the message — body text, embedded chart titles, broker-receipt cards (BloFin / Bybit / Binance referral images), table headers. Without this field the linker cannot find the originating signal and the update will be discarded. If you can read it anywhere in the message — text or image — populate this field.
 level                — TP level that was hit (integer, 1-based). Only for tp_hit.
 closedPercent        — Percentage of position closed, as a decimal string ("50" = 50%).
 remainingPercent     — Percentage still open, as a decimal string.
 newStopLoss          — New stop price after stop_modified or breakeven_move.
-realizedPriceRef     — Price at which the KOL reports closing (for manual/TP closes).
+realizedPriceRef     — Price at which the KOL reports closing. Must be a price in the same units as the symbol's current market price (e.g. ~0.015 for BIGTIME, ~80000 for BTC). DO NOT compute, derive, or convert; if you only see a percentage gain or a leverage-multiplied PnL, leave this field empty. Better to omit than to invent.
 realizedRR           — Realised risk/reward ratio, signed decimal string ("1.89" profit, "-1.00" full stop).
 linkedExternalMessageId — Discord message ID embedded in a bot-format URL inside the message.
 confidence           — Your confidence in this extraction [0, 1].
@@ -77,9 +77,9 @@ reasoning            — Brief chain-of-thought.
 
 ## Extraction rules
 
-1. Only populate fields present in the message.
+1. Only populate fields present in the message — do NOT compute or infer numerical values.
 2. All price/percentage values must be decimal strings.
-3. reasoning is required.`)
+3. reasoning is required. If you populated a numerical field from an image, mention which image element you read it off (e.g. "close price 0.01470 from BloFin receipt").`)
   }
 
   // Inject per-KOL hints
