@@ -23,7 +23,10 @@
   --secondary:         #EEF0F5;
   --secondary-foreground:#4A5568;
   --muted:             #EEF0F5;
-  --muted-foreground:  #64748B;
+  /* slate-600 (5.6:1 on #F5F7FA) instead of slate-500 (4.0:1) — at the
+     small font sizes where this colour gets used most (10-12px chips,
+     metadata labels) the WCAG AA threshold of 4.5:1 was being missed. */
+  --muted-foreground:  #475569;
   --accent:            #EEF0F5;
   --accent-foreground: #1A202C;
 
@@ -149,3 +152,26 @@
     @apply font-sans;
   }
 }
+
+/* ============================================================
+   Light-mode color-utility overrides
+
+   Tailwind's `text-{color}-400` palette is tuned for use on dark
+   backgrounds. On the light theme's near-white surface, those tones
+   wash out (amber-400 #fbbf24 on white = 2.4:1 contrast, well below
+   WCAG AA's 4.5:1). The dashboard uses these classes heavily for
+   status pills and rejection callouts — without darkening them in
+   light mode the text is hard to read at 10-12px.
+
+   Strategy: shift each common `-400` utility down to `-700` only when
+   no `.dark` ancestor is in scope. The `.dark` selector wins when
+   present so the dark theme keeps its original Tailwind colours.
+   ============================================================ */
+:root:not(.dark) .text-amber-400  { color: #b45309; }  /* amber-700 */
+:root:not(.dark) .text-amber-300  { color: #b45309; }
+:root:not(.dark) .text-red-400    { color: #b91c1c; }  /* red-700 */
+:root:not(.dark) .text-green-400  { color: #15803d; }  /* green-700 */
+:root:not(.dark) .text-blue-400   { color: #1d4ed8; }  /* blue-700 */
+:root:not(.dark) .text-purple-400 { color: #7e22ce; }  /* purple-700 */
+:root:not(.dark) .text-purple-300 { color: #7e22ce; }
+:root:not(.dark) .text-teal-400   { color: #0f766e; }  /* teal-700 */

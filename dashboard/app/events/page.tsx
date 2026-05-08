@@ -202,7 +202,7 @@ export default function EventsPage() {
             >
               {opt.label}
               {count > 0 && (
-                <span className="ml-1.5 font-mono text-[10px] opacity-70">{count}</span>
+                <span className="ml-1.5 font-mono text-[10px] text-muted-foreground">{count}</span>
               )}
             </button>
           );
@@ -260,7 +260,7 @@ function EventRow({ entry, kolLabel, alt }: { entry: EventEntry; kolLabel?: stri
         alt ? "bg-muted/20" : ""
       }`}
     >
-      <span className="w-12 shrink-0 text-right text-[10px] text-muted-foreground/70">
+      <span className="w-12 shrink-0 text-right text-[10px] text-muted-foreground">
         #{entry.seq}
       </span>
       <span className="w-20 shrink-0 text-muted-foreground">{formatTime(entry.ts)}</span>

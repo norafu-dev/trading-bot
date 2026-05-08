@@ -190,7 +190,7 @@ export default function OperationsPage() {
               : "border-border bg-card text-muted-foreground hover:bg-muted hover:text-foreground"
           }`}
         >
-          全部 <span className="ml-1 font-mono opacity-70">{operations.length}</span>
+          全部 <span className="ml-1 font-mono text-muted-foreground">{operations.length}</span>
         </button>
         {(["pending", "approved", "rejected", "executed", "failed"] as Operation["status"][]).map((s) => {
           const n = statusCounts[s] ?? 0;
@@ -204,7 +204,7 @@ export default function OperationsPage() {
               }`}
             >
               {STATUS_LABEL[s]}
-              <span className="ml-1 font-mono opacity-70">{n}</span>
+              <span className="ml-1 font-mono opacity-80">{n}</span>
             </button>
           );
         })}

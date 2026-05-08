@@ -455,15 +455,15 @@ function PriceCheckBar({ check }: { check: NonNullable<Signal["priceCheck"]> }) 
       <div className="flex items-center gap-2">
         <span className="shrink-0">{icon}</span>
         <span className="font-medium">{headline}</span>
-        <span className="ml-auto font-mono text-[10px] opacity-70">
+        <span className="ml-auto font-mono text-[10px] opacity-90">
           live {check.currentPrice} ({check.source})
         </span>
       </div>
       {distLabel && (
-        <div className="mt-1 text-[11px] opacity-90">{distLabel}</div>
+        <div className="mt-1 text-[11px] font-medium">{distLabel}</div>
       )}
       {check.note && check.note !== distLabel && (
-        <div className="mt-0.5 truncate text-[10px] opacity-60" title={check.note}>
+        <div className="mt-0.5 truncate text-[10px] opacity-80" title={check.note}>
           {check.note}
         </div>
       )}
