@@ -325,12 +325,8 @@ function OperationCard({ op, kol, onChanged }: { op: Operation; kol?: KolConfig;
             </p>
           )}
 
-          {/* Guard rejection callout */}
-          {op.guardRejection && (
-            <div className="mt-2 rounded-md border border-red-500/30 bg-red-500/10 px-2 py-1.5 text-xs text-red-400">
-              <span className="font-medium">[{op.guardRejection.guardName}]</span> {op.guardRejection.reason}
-            </div>
-          )}
+          {/* Decision callout — guard / timeout / human / broker */}
+          <DecisionCallout op={op} />
 
           {/* Approve / reject controls (pending only) */}
           {op.status === "pending" && (
@@ -411,6 +407,90 @@ function OperationCard({ op, kol, onChanged }: { op: Operation; kol?: KolConfig;
       </div>
     </div>
   );
+}
+
+/**
+ * Bottom-of-card explainer showing why this op is no longer pending.
+ * Replaces the old guardRejection-only callout so an "approval timeout"
+ * isn't visually identical to "guard rejected" — the operator deserves
+ * to see "you missed the 5-minute window" called out specifically.
+ */
+function DecisionCallout({ op }: { op: Operation }) {
+  // Still pending → no decision to surface yet
+  if (op.status === "pending") return null;
+
+  // Guard rejection — the most diagnostic case, surface guard + reason
+  if (op.status === "rejected" && op.guardRejection) {
+    return (
+      <div className="mt-2 rounded-md border border-red-500/30 bg-red-500/10 px-2 py-1.5 text-xs text-red-400">
+        <span className="font-medium">守卫拒绝 [{op.guardRejection.guardName}]</span>
+        <span className="ml-1.5 opacity-80">{op.guardRejection.reason}</span>
+      </div>
+    );
+  }
+
+  if (!op.lastDecision) return null;
+  const ts = new Date(op.lastDecision.at).toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
+  // Timeout — engine self-rejects after 5 min
+  if (
+    op.status === "rejected" &&
+    op.lastDecision.by === "engine" &&
+    op.lastDecision.reason?.startsWith("approval timeout")
+  ) {
+    return (
+      <div className="mt-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-xs text-amber-400">
+        <span className="font-medium">⏰ 审批超时自动拒绝</span>
+        <span className="ml-1.5 opacity-80">{ts} · {op.lastDecision.reason}</span>
+      </div>
+    );
+  }
+
+  // Human reject — dashboard or telegram
+  if (
+    op.status === "rejected" &&
+    (op.lastDecision.by === "dashboard" || op.lastDecision.by === "telegram")
+  ) {
+    const surface = op.lastDecision.by === "dashboard" ? "网页手动拒绝" : "Telegram 手动拒绝";
+    return (
+      <div className="mt-2 rounded-md border border-red-500/30 bg-red-500/10 px-2 py-1.5 text-xs text-red-400">
+        <span className="font-medium">{surface}</span>
+        <span className="ml-1.5 opacity-80">{ts}</span>
+        {op.lastDecision.reason && (
+          <span className="ml-1.5 opacity-80">· {op.lastDecision.reason}</span>
+        )}
+      </div>
+    );
+  }
+
+  // Executed — broker confirmed, surface order id
+  if (op.status === "executed" && op.lastDecision.reason) {
+    return (
+      <div className="mt-2 rounded-md border border-green-500/30 bg-green-500/10 px-2 py-1.5 text-xs text-green-400">
+        <span className="font-medium">已执行</span>
+        <span className="ml-1.5 opacity-80 font-mono">{op.lastDecision.reason}</span>
+      </div>
+    );
+  }
+
+  // Failed — broker rejected, surface category + message
+  if (op.status === "failed") {
+    return (
+      <div className="mt-2 rounded-md border border-red-500/30 bg-red-500/10 px-2 py-1.5 text-xs text-red-400">
+        <span className="font-medium">⚠️ 执行失败</span>
+        {op.lastDecision.reason && (
+          <span className="ml-1.5 opacity-80">{op.lastDecision.reason}</span>
+        )}
+      </div>
+    );
+  }
+
+  return null;
 }
 
 /**

@@ -503,6 +503,27 @@ export interface Operation {
    */
   guardRejection?: { guardName: string; reason: string }
 
+  /**
+   * The most recent status-change event folded into this operation.
+   * Populated by `OperationStore.readAllOperations()` from the
+   * append-only status-change records. Lets the dashboard distinguish:
+   *   - guard rejection      (status = 'rejected', no lastDecision,
+   *                           guardRejection populated)
+   *   - approval timeout     (status = 'rejected', lastDecision.by =
+   *                           'engine', reason starts with "approval timeout")
+   *   - human reject         (status = 'rejected', lastDecision.by =
+   *                           'dashboard' / 'telegram')
+   *   - executed/failed/etc  (status = 'executed' | 'failed', lastDecision.by =
+   *                           'broker', reason carries broker order id)
+   *
+   * Absent when the operation is still in its original `pending` state.
+   */
+  lastDecision?: {
+    by: 'dashboard' | 'telegram' | 'engine' | 'broker'
+    at: string
+    reason?: string
+  }
+
   /** The broker-agnostic intent. See `OperationSpec` discriminant. */
   spec: OperationSpec
 

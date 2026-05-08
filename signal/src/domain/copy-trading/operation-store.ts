@@ -116,6 +116,11 @@ export class OperationStore implements IOperationStore {
    * Fold all status-change events onto their operations and return the
    * latest view. Insertion order is preserved (creation chronology),
    * but each operation reflects its CURRENT status.
+   *
+   * Also attaches `lastDecision` ({by, at, reason}) from the most recent
+   * status-change so the dashboard can distinguish guard rejections from
+   * approval timeouts from human rejects without re-querying the event
+   * log per operation.
    */
   async readAllOperations(): Promise<Operation[]> {
     const byId = new Map<string, Operation>()
@@ -135,6 +140,11 @@ export class OperationStore implements IOperationStore {
         continue
       }
       op.status = line.newStatus
+      op.lastDecision = {
+        by: line.by,
+        at: line.at,
+        ...(line.reason !== undefined && { reason: line.reason }),
+      }
     }
     return order.map((id) => byId.get(id)!).filter(Boolean)
   }

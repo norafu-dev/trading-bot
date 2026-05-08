@@ -99,6 +99,41 @@ describe('OperationStore', () => {
       expect(all[0].status).toBe('executed')
     })
 
+    it('attaches lastDecision from the most recent status-change event', async () => {
+      await store.append(makeOperation({ id: 'op-1', status: 'pending' }))
+      await store.appendStatusChange({
+        operationId: 'op-1',
+        newStatus: 'rejected',
+        at: '2026-05-02T10:05:00Z',
+        by: 'engine',
+        reason: 'approval timeout (300s)',
+      })
+
+      const all = await store.readAllOperations()
+      expect(all[0].lastDecision).toEqual({
+        by: 'engine',
+        at: '2026-05-02T10:05:00Z',
+        reason: 'approval timeout (300s)',
+      })
+    })
+
+    it('lastDecision tracks the latest event when several stack', async () => {
+      await store.append(makeOperation({ id: 'op-1', status: 'pending' }))
+      await store.appendStatusChange({ operationId: 'op-1', newStatus: 'approved', at: '2026-05-02T10:00:00Z', by: 'dashboard' })
+      await store.appendStatusChange({ operationId: 'op-1', newStatus: 'executed', at: '2026-05-02T10:01:00Z', by: 'broker', reason: 'order-abc' })
+
+      const all = await store.readAllOperations()
+      expect(all[0].lastDecision?.by).toBe('broker')
+      expect(all[0].lastDecision?.reason).toBe('order-abc')
+    })
+
+    it('lastDecision is absent when the op never had a status change', async () => {
+      await store.append(makeOperation({ id: 'op-1', status: 'pending' }))
+
+      const all = await store.readAllOperations()
+      expect(all[0].lastDecision).toBeUndefined()
+    })
+
     it('skips status-change events targeting an unknown operation', async () => {
       await store.appendStatusChange({ operationId: 'orphan', newStatus: 'approved', at: '2026-05-02T10:00:00Z', by: 'dashboard' })
       // Should not throw or include any operation

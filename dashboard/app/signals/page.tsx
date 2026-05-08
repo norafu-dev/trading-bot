@@ -473,11 +473,10 @@ function PriceCheckBar({ check }: { check: NonNullable<Signal["priceCheck"]> }) 
 
 /**
  * Compact tag showing whether a signal made it through to a downstream
- * Operation. Three states:
- *   - no op found            → "→ 未跟单" (signal did not reach the engine,
- *                                possibly filtered before sizing)
- *   - op present, rejected   → "→ 守卫拒绝: <name>" (which guard fired)
- *   - op present, alive      → "→ <chinese status>" (pending/approved/etc)
+ * Operation. For rejections we surface the SOURCE (guard / timeout /
+ * human) in the badge — without this, an "approval timeout" looked
+ * identical to "guard rejected" and the operator couldn't tell that
+ * they were the bottleneck.
  */
 function DownstreamBadge({ op }: { op?: Operation }) {
   if (!op) {
@@ -499,20 +498,45 @@ function DownstreamBadge({ op }: { op?: Operation }) {
     failed: { label: "执行失败", cls: "border-red-500/40 bg-red-500/10 text-red-400" },
   };
   const s = statusMap[op.status];
-  // For rejected by guard, surface which one — this is the most diagnostic
-  // bit of information the dashboard can show without an extra click.
-  const reason = op.guardRejection?.guardName;
+  const decoration = decorateRejection(op);
   return (
     <span
       className={`inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${s.cls}`}
-      title={op.guardRejection?.reason ?? `Operation ${op.id.slice(-8)}`}
+      title={decoration?.fullText ?? `Operation ${op.id.slice(-8)}`}
     >
       → {s.label}
-      {reason && op.status === "rejected" && (
-        <span className="ml-1 opacity-70">[{reason}]</span>
+      {decoration && (
+        <span className="ml-1 opacity-70">[{decoration.short}]</span>
       )}
     </span>
   );
+}
+
+/**
+ * For a rejected/failed op, derive a short tag + tooltip text that
+ * tells the operator WHY. Order of precedence:
+ *   1. Guard rejection — most specific, names the rule that fired
+ *   2. Engine timeout — the operator missed the 5-min window
+ *   3. Human reject — surfaces the actor and (if given) the reason
+ *   4. Broker failure — execution category from error-classifier
+ */
+function decorateRejection(op: Operation): { short: string; fullText: string } | null {
+  if (op.status === "rejected") {
+    if (op.guardRejection) {
+      return { short: op.guardRejection.guardName, fullText: op.guardRejection.reason };
+    }
+    if (op.lastDecision?.by === "engine" && op.lastDecision.reason?.startsWith("approval timeout")) {
+      return { short: "审批超时", fullText: op.lastDecision.reason };
+    }
+    if (op.lastDecision?.by === "dashboard" || op.lastDecision?.by === "telegram") {
+      const actor = op.lastDecision.by === "dashboard" ? "网页拒绝" : "Telegram 拒绝";
+      return { short: actor, fullText: op.lastDecision.reason ?? actor };
+    }
+  }
+  if (op.status === "failed" && op.lastDecision?.by === "broker" && op.lastDecision.reason) {
+    return { short: "下单失败", fullText: op.lastDecision.reason };
+  }
+  return null;
 }
 
 function Field({ label, value, hint, tone }: {
