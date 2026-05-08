@@ -17,14 +17,16 @@ export default function ChannelsPage() {
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<ChannelConfig | null>(null);
   const [showModal, setShowModal] = useState(false);
-  // null = original config order; click 启用 header to toggle asc/desc.
-  const [sortKey, setSortKey] = useState<SortKey>(null);
+  // Default to enabled-first because that's almost always what the
+  // operator wants to see — disabled channels are usually paused KOLs
+  // they're not actively watching. Click the header to cycle through
+  // enabled-first → disabled-first → original config order → ...
+  const [sortKey, setSortKey] = useState<SortKey>("enabled");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
 
   function handleSortClick(key: NonNullable<SortKey>) {
     if (sortKey === key) {
-      // Three-state cycle so users can return to original order:
-      //   off → desc → asc → off
+      // Three-state cycle:  desc → asc → off → desc
       if (sortDir === "desc") setSortDir("asc");
       else { setSortKey(null); setSortDir("desc"); }
     } else {
