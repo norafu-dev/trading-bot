@@ -6,16 +6,35 @@ const SEPARATOR_RE = /^[-=*~_]{3,}$/
 
 /**
  * "Edit notice" pattern — some channels run a translation/forwarding bot
- * that re-posts edited messages as new ones, prefixed with "✏️ **已编辑**".
- * These look like real new messages to Discord (event=create, has embed)
- * but they're noise for our pipeline: the original message was already
- * processed, and the re-post would bias the LLM with the *quoted* version
- * of the prior signal. We discard them outright.
+ * that re-posts edited messages as new ones, prefixed with "✏️ **已编辑**"
+ * followed by a quoted excerpt of the original. These look like real new
+ * messages to Discord (event=create, has embed) but they're noise for
+ * our pipeline.
  *
- * Match is case-insensitive on "已编辑" / "edited" so it covers both the
- * Chinese and English flavours of the same forwarder bots.
+ * IMPORTANT: a previous regex did substring-match on the whole embed,
+ * which dropped LEGITIMATE re-posts of edited signals where the
+ * forwarder bot kept the full updated body after the "已编辑" header.
+ * `isPureEditNotice` now requires the embed to start with the marker
+ * AND have nothing of substance after the leading quote block — that
+ * narrows discards to true notice-only re-posts.
  */
-const EDIT_NOTICE_RE = /✏️\s*\*?\*?(?:已编辑|edited)/i
+const EDIT_NOTICE_PREFIX_RE = /^\s*✏️\s*\*{0,2}\s*(?:已编辑|edited)/i
+
+function isPureEditNotice(description: string): boolean {
+  if (!EDIT_NOTICE_PREFIX_RE.test(description)) return false
+  // Strip the marker line plus any contiguous Discord quote lines (`> ...`)
+  // that immediately follow it. What's left should be the message body.
+  const lines = description.split('\n')
+  let i = 0
+  // Drop the leading marker line(s)
+  while (i < lines.length && (EDIT_NOTICE_PREFIX_RE.test(lines[i]) || lines[i].trim() === '')) i++
+  // Drop the quoted-original block
+  while (i < lines.length && (/^\s*>/.test(lines[i]) || lines[i].trim() === '')) i++
+  const remainder = lines.slice(i).join('\n').trim()
+  // If <30 chars of body remain, treat as pure notice. A real edited
+  // signal re-post will have hundreds of characters here.
+  return remainder.length < 30
+}
 
 /**
  * Drops messages that carry no signal-relevant content.
@@ -43,12 +62,14 @@ export class NoiseFilter implements IMessageFilter {
     )
     const hasEmbeds = embedsWithBody.length > 0
 
-    // Edit-notice check: only when there are embeds AND every one of them
-    // is an edit notice. A normal signal embed should never match this.
+    // Edit-notice check: drop when every embed is a PURE edit notice
+    // (marker + quoted excerpt only). Embeds that start with the
+    // ✏️ marker but contain a full re-posted signal body are kept —
+    // see isPureEditNotice for the exact heuristic.
     if (
       !hasAttachments &&
       hasEmbeds &&
-      embedsWithBody.every((e) => EDIT_NOTICE_RE.test(e.description ?? ''))
+      embedsWithBody.every((e) => isPureEditNotice(e.description ?? ''))
     ) {
       return { pass: false, reason: 'noise_edit_notice' }
     }

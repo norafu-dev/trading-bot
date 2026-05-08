@@ -190,6 +190,39 @@ describe('NoiseFilter', () => {
     expect(result.pass).toBe(true)
   })
 
+  // Regression: a real Trader Cash repost where the forwarder bot
+  // prepended "✏️ **已编辑**" to a fully re-posted signal body. The first
+  // version of the filter dropped this as noise; the body has a full
+  // updated signal with new TP levels we MUST parse.
+  it('keeps an edit-notice embed that re-posts the full updated signal body', () => {
+    const result = filter.apply(
+      makeMessage({
+        embeds: [{
+          fields: [],
+          description: `✏️ **已编辑**
+> 原消息: #BTC Limit Setup  I agree with option one.   I ...
+
+#BTC Limit Setup
+
+I agree with option one.
+
+I see this as a normal pullback to gain more strength for the next move up.
+
+5x Leverage
+
+📈 Entry: 78850
+🛑 SL: 77369.5
+
+🎯 Target 1: 81951.2
+🎯 Target 2: 85310.9
+🎯 Target 3: Open`,
+        }],
+      }),
+      ctx,
+    )
+    expect(result.pass).toBe(true)
+  })
+
   it('passes an image-only message (no content, has attachments)', () => {
     const result = filter.apply(
       makeMessage({
