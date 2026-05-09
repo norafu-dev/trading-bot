@@ -24,6 +24,13 @@ action         — "open" for new long/short entries. "close" when the KOL is cl
 side           — "long" (bullish) or "short" (bearish). Omit for pure spot signals with no direction stated.
 contractType   — "perpetual" for futures/perps, "spot" for spot. Omit if unknown.
 entry.type     — "limit" if a specific price or range is given. "market" for immediate/ASAP entries.
+                 IMPORTANT: charts beat text. If the message includes a chart with an explicit
+                 entry marker (TradingView Long/Short Position drawing tool — a vertical
+                 green/red rectangle with a numbered edge representing the entry), use that
+                 chart-specified price as a "limit" entry EVEN WHEN the body text says
+                 "Market", "CMP", "at current price", or similar shorthand. Those words are
+                 colloquial filler in many KOLs' style — the chart is the precise spec.
+                 Only fall back to "market" when the chart has no entry marker.
 entry.price    — Single entry price as a decimal string, e.g. "76500".
 entry.priceRangeLow / priceRangeHigh — When a price range is given instead of a single price.
 stopLoss.price — Fixed stop-loss price as a decimal string.
