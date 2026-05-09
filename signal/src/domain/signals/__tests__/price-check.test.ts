@@ -67,8 +67,8 @@ describe('computePriceCheck', () => {
 
   it('flags a short as stale when the market has dropped far below entry', async () => {
     const r = await computePriceCheck(
-      // short, entry 80000; live 76521 → market already down 4% from entry
-      makeSignal({ side: 'short', entry: { type: 'limit', price: '80000' } }),
+      // short, entry 90000 (limit threshold 5%); live 76521 → -15% past entry
+      makeSignal({ side: 'short', entry: { type: 'limit', price: '90000' } }),
       makeService(baseQuote),
     )
     expect(r?.stale).toBe(true)
@@ -78,6 +78,47 @@ describe('computePriceCheck', () => {
     const r = await computePriceCheck(
       // long, entry 78000; live 76521 → entry is still above live, fresh
       makeSignal({ side: 'long', entry: { type: 'limit', price: '78000' } }),
+      makeService(baseQuote),
+    )
+    expect(r?.stale).toBeUndefined()
+  })
+
+  // ── Order-type-aware threshold ──────────────────────────────────
+  // Market orders fill instantly, so even small drift is bad → 1% threshold.
+  // Limit orders wait for pullback, normal entries sit 1-2% past current →
+  // wider 5% threshold avoids falsely staling normal pullback setups.
+
+  it('LIMIT long: 4% past entry is NOT stale (within 5% tolerance)', async () => {
+    // long, entry 73500; live 76521 → 4.1% drift
+    const r = await computePriceCheck(
+      makeSignal({ side: 'long', entry: { type: 'limit', price: '73500' } }),
+      makeService(baseQuote),
+    )
+    expect(r?.stale).toBeUndefined()
+  })
+
+  it('LIMIT long: 6% past entry IS stale', async () => {
+    // long, entry 72000; live 76521 → 6.3% drift
+    const r = await computePriceCheck(
+      makeSignal({ side: 'long', entry: { type: 'limit', price: '72000' } }),
+      makeService(baseQuote),
+    )
+    expect(r?.stale).toBe(true)
+  })
+
+  it('MARKET long: 2% past entry IS stale (1% threshold)', async () => {
+    // long market, entry 75000; live 76521 → 2.0% drift
+    const r = await computePriceCheck(
+      makeSignal({ side: 'long', entry: { type: 'market', price: '75000' } }),
+      makeService(baseQuote),
+    )
+    expect(r?.stale).toBe(true)
+  })
+
+  it('MARKET long: 0.5% past entry is NOT stale', async () => {
+    // long market, entry 76140; live 76521 → 0.5% drift
+    const r = await computePriceCheck(
+      makeSignal({ side: 'long', entry: { type: 'market', price: '76140' } }),
       makeService(baseQuote),
     )
     expect(r?.stale).toBeUndefined()

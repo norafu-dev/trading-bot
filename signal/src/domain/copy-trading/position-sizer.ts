@@ -83,13 +83,21 @@ export class PositionSizer {
         ? signal.takeProfits.slice(0, Math.max(1, riskConfig.maxTakeProfits))
         : undefined
 
+    // Resolve entry price: prefer explicit `price`, else collapse a range
+    // to a single edge based on side. Long signals enter on pullbacks →
+    // we take the LOW edge (best fill, hardest to reach). Short signals
+    // enter on rallies → take the HIGH edge. Without this, range-only
+    // entries (e.g. KOL writes "Entry: 0.10 - 0.1064") fall through to
+    // limit orders with no price, which the broker rejects.
+    const entryPrice = resolveEntryPrice(signal.entry, signal.side ?? 'long')
+
     const spec: OperationSpec = {
       action: 'placeOrder',
       symbol: normalised?.ccxtSymbol ?? signal.symbol,
       side: (signal.side ?? 'long') as 'long' | 'short',
       contractType,
       orderType: signal.entry?.type ?? 'market',
-      ...(signal.entry?.price !== undefined && { price: signal.entry.price }),
+      ...(entryPrice !== undefined && { price: entryPrice }),
       size: { unit: 'absolute', value: notional.toFixed(2) },
       ...(signal.leverage !== undefined && { leverage: signal.leverage }),
       ...(signal.stopLoss?.price !== undefined && { stopLoss: { price: signal.stopLoss.price } }),
@@ -122,4 +130,38 @@ export class PositionSizer {
       }),
     }
   }
+}
+
+/**
+ * Convert a Signal.entry (which may be a single price, a range, or
+ * neither) into a single broker-ready limit price.
+ *
+ * Side-aware range collapse:
+ *   - long  → priceRangeLow  (we want the cheapest fill; the limit will
+ *                              wait for a deeper pullback)
+ *   - short → priceRangeHigh (we want the most expensive fill; the limit
+ *                              will wait for a higher rally)
+ * If only one edge of the range is given, use it. If neither edge is
+ * given but `price` is, use that. Otherwise return undefined and the
+ * caller's spec.price stays absent (broker will reject a limit order
+ * with no price — which is actually correct: we shouldn't fabricate a
+ * price the KOL didn't authorise).
+ */
+function resolveEntryPrice(
+  entry: { price?: string; priceRangeLow?: string; priceRangeHigh?: string } | undefined,
+  side: 'long' | 'short',
+): string | undefined {
+  if (!entry) return undefined
+  if (entry.price !== undefined) return entry.price
+  const low = entry.priceRangeLow
+  const high = entry.priceRangeHigh
+  if (side === 'long') {
+    // Prefer low (deeper pullback), fall back to high if low is missing.
+    if (low !== undefined) return low
+    if (high !== undefined) return high
+  } else {
+    if (high !== undefined) return high
+    if (low !== undefined) return low
+  }
+  return undefined
 }

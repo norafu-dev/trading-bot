@@ -224,4 +224,82 @@ describe('PositionSizer', () => {
     if (op.spec.action !== 'placeOrder') throw new Error()
     expect(op.spec.takeProfits).toHaveLength(2)
   })
+
+  // ── Entry-range collapse ───────────────────────────────────────────
+  // KOLs often write "Entry: 0.10 - 0.1064" → LLM produces a range with
+  // priceRangeLow / priceRangeHigh and no `price`. Without collapse, the
+  // op.spec.price stays undefined → broker rejects the limit order.
+  describe('entry range collapse', () => {
+    it('long: takes priceRangeLow (cheapest fill, deepest pullback)', () => {
+      const op = sizer.size({
+        signal: makeSignal({
+          side: 'long',
+          entry: { type: 'limit', priceRangeLow: '0.10', priceRangeHigh: '0.1064' },
+        }),
+        kol: makeKol(),
+        account: makeAccount(),
+        riskConfig: DEFAULT_RISK,
+      })
+      if (op.spec.action !== 'placeOrder') throw new Error()
+      expect(op.spec.orderType).toBe('limit')
+      expect(op.spec.price).toBe('0.10')
+    })
+
+    it('short: takes priceRangeHigh (most expensive fill, highest rally)', () => {
+      const op = sizer.size({
+        signal: makeSignal({
+          side: 'short',
+          entry: { type: 'limit', priceRangeLow: '76500', priceRangeHigh: '77200' },
+        }),
+        kol: makeKol(),
+        account: makeAccount(),
+        riskConfig: DEFAULT_RISK,
+      })
+      if (op.spec.action !== 'placeOrder') throw new Error()
+      expect(op.spec.price).toBe('77200')
+    })
+
+    it('explicit price takes precedence over range', () => {
+      const op = sizer.size({
+        signal: makeSignal({
+          side: 'long',
+          entry: { type: 'limit', price: '0.105', priceRangeLow: '0.10', priceRangeHigh: '0.11' },
+        }),
+        kol: makeKol(),
+        account: makeAccount(),
+        riskConfig: DEFAULT_RISK,
+      })
+      if (op.spec.action !== 'placeOrder') throw new Error()
+      expect(op.spec.price).toBe('0.105')
+    })
+
+    it('falls back to single-edge range when only one is given', () => {
+      const op = sizer.size({
+        signal: makeSignal({
+          side: 'long',
+          entry: { type: 'limit', priceRangeHigh: '0.1064' },  // low missing
+        }),
+        kol: makeKol(),
+        account: makeAccount(),
+        riskConfig: DEFAULT_RISK,
+      })
+      if (op.spec.action !== 'placeOrder') throw new Error()
+      expect(op.spec.price).toBe('0.1064')
+    })
+
+    it('omits price when entry has neither price nor range (market entries)', () => {
+      const op = sizer.size({
+        signal: makeSignal({
+          side: 'long',
+          entry: { type: 'market' },
+        }),
+        kol: makeKol(),
+        account: makeAccount(),
+        riskConfig: DEFAULT_RISK,
+      })
+      if (op.spec.action !== 'placeOrder') throw new Error()
+      expect(op.spec.orderType).toBe('market')
+      expect(op.spec.price).toBeUndefined()
+    })
+  })
 })

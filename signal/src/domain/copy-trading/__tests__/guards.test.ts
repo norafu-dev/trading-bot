@@ -63,14 +63,19 @@ describe('StaleSignalGuard', () => {
   // waiting for a pullback. They should never trip the stale guard even
   // when priceCheck.stale is true (e.g. TAO short 411.84 with live 310.94 —
   // the order will simply not fill until price rebounds).
-  it('passes a stale-flagged LIMIT order — limits wait for the pullback', () => {
+  // Limit orders no longer get a blanket pass. computePriceCheck applies
+  // a wider 5% threshold (vs 1% for market) BEFORE setting stale=true, so
+  // by the time the guard sees stale=true the limit's entry is already
+  // egregiously past — exactly the case that should reject.
+  it('rejects a stale-flagged LIMIT order — guard trusts the order-type-aware priceCheck', () => {
     const r = g.check(makeCtx({
       // makeCtx default operation is already limit (see helpers)
       signal: makeSignal({
         priceCheck: { currentPrice: '310.94', source: 'binance', fetchedAt: 'x', stale: true, entryDistancePercent: '32.45' },
       }),
     }))
-    expect(r).toBeNull()
+    expect(r).toMatch(/stale/)
+    expect(r).toContain('32.45')
   })
 })
 

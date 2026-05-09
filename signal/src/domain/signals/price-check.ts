@@ -3,11 +3,24 @@ import type { IPriceService } from '../../connectors/market/types.js'
 import { logger } from '../../core/logger.js'
 
 /**
- * Threshold (signed %) past which a signal's entry counts as "already gone"
- * in the wrong direction. Conservative — better to flag a borderline-stale
- * signal for manual review than to enter a trade after the move.
+ * Threshold (signed %) past which a market-order signal's entry counts as
+ * "already gone." A market order fills at the live price, so even a small
+ * drift from the KOL's stated entry means worse fills + worse R/R.
  */
-const STALE_THRESHOLD_PERCENT = 1.0
+const STALE_THRESHOLD_MARKET_PERCENT = 1.0
+
+/**
+ * Threshold for limit orders. A limit waits for price to come back to the
+ * entry, so the fact that price has drifted somewhat past the entry isn't
+ * automatically bad — the order just stays unfilled until the market
+ * cooperates. We only flag stale once the drift is large enough that
+ * "coming back" is unlikely within the position's lifetime (e.g. 5%).
+ *
+ * This catches the egregious case (KOL喊单时 0.10, 现价 0.110, entry
+ * 区间 0.10-0.1064 早已被穿过 8%+) without falsely staling the normal
+ * "limit waiting for a 1-2% pullback" setup.
+ */
+const STALE_THRESHOLD_LIMIT_PERCENT = 5.0
 
 /**
  * Magnitude difference (factor) above which we declare a unit mismatch.
@@ -57,12 +70,15 @@ export async function computePriceCheck(
       entryDistancePercent = distPct.toFixed(3)
 
       // "Stale": the live price has already moved past the entry in the
-      // direction the trade is supposed to capture.
-      //   long  + entry < live by > threshold → market already ran above entry
-      //   short + entry > live by > threshold → market already dropped below
-      if (signal.side === 'long' && distPct < -STALE_THRESHOLD_PERCENT) {
+      // direction the trade is supposed to capture. Threshold differs by
+      // order type — see constants above.
+      const threshold =
+        signal.entry?.type === 'limit'
+          ? STALE_THRESHOLD_LIMIT_PERCENT
+          : STALE_THRESHOLD_MARKET_PERCENT
+      if (signal.side === 'long' && distPct < -threshold) {
         stale = true
-      } else if (signal.side === 'short' && distPct > STALE_THRESHOLD_PERCENT) {
+      } else if (signal.side === 'short' && distPct > threshold) {
         stale = true
       }
 

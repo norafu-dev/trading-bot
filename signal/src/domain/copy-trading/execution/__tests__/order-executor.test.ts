@@ -223,11 +223,93 @@ describe('OrderExecutor', () => {
       expect(calls.placeOrder[3]?.amount).toBeCloseTo(0.001 / 6, 8)     // ~17%
     })
 
+    it('skips TPs already crossed by live price and redistributes amount to survivors', async () => {
+      // Live = 50000. Long signal with TPs 49000 / 49500 / 51000 / 52000:
+      // 49000 and 49500 are BELOW live (already crossed for a long) → skip.
+      // 51000 and 52000 survive and split the position 50/50 (even).
+      const { broker, calls } = makeMockBroker(50000)
+      const exec = new OrderExecutor({ broker, loadExecutionConfig: async () => cfg, loadRiskConfig: async () => DEFAULT_RISK_CFG })
+      const op = makeOp()
+      op.spec = {
+        ...op.spec,
+        action: 'placeOrder',
+        takeProfits: [
+          { level: 1, price: '49000' },  // crossed
+          { level: 2, price: '49500' },  // crossed
+          { level: 3, price: '51000' },
+          { level: 4, price: '52000' },
+        ],
+      } as never
+
+      await exec.execute(op)
+      // 1 main + 2 surviving TPs only
+      expect(calls.placeOrder).toHaveLength(3)
+      expect(calls.placeOrder[1]?.price).toBe(51000)
+      expect(calls.placeOrder[2]?.price).toBe(52000)
+      // Each survivor takes 50% of position (0.001 / 2 = 0.0005)
+      expect(calls.placeOrder[1]?.amount).toBeCloseTo(0.0005, 8)
+      expect(calls.placeOrder[2]?.amount).toBeCloseTo(0.0005, 8)
+    })
+
+    it('skips ALL TPs when every level is crossed (no TP orders placed)', async () => {
+      // Live = 50000, all TPs below = all crossed for long.
+      const { broker, calls } = makeMockBroker(50000)
+      const exec = new OrderExecutor({ broker, loadExecutionConfig: async () => cfg, loadRiskConfig: async () => DEFAULT_RISK_CFG })
+      const op = makeOp()
+      op.spec = {
+        ...op.spec,
+        action: 'placeOrder',
+        takeProfits: [
+          { level: 1, price: '48000' },
+          { level: 2, price: '49000' },
+          { level: 3, price: '49500' },
+        ],
+      } as never
+
+      const result = await exec.execute(op)
+      // Just the main order — no TPs survive
+      expect(calls.placeOrder).toHaveLength(1)
+      expect(result.extraTpOrderIds).toEqual([])
+    })
+
+    it('short: filters TPs above live (those would be bid-side fills)', async () => {
+      const { broker, calls } = makeMockBroker(50000)
+      const exec = new OrderExecutor({ broker, loadExecutionConfig: async () => cfg, loadRiskConfig: async () => DEFAULT_RISK_CFG })
+      const op = makeOp()
+      // short: valid TPs are BELOW live; crossed TPs are ABOVE
+      op.spec = {
+        ...op.spec,
+        action: 'placeOrder',
+        side: 'short',
+        takeProfits: [
+          { level: 1, price: '51000' },  // ABOVE live → crossed for short
+          { level: 2, price: '49000' },  // OK
+          { level: 3, price: '48000' },  // OK
+        ],
+      } as never
+
+      await exec.execute(op)
+      expect(calls.placeOrder).toHaveLength(3)  // 1 main + 2 surviving
+      expect(calls.placeOrder[1]?.price).toBe(49000)
+      expect(calls.placeOrder[2]?.price).toBe(48000)
+    })
+
     it('reduce-only TPs use the closing side (long → sell, short → buy)', async () => {
       const { broker, calls } = makeMockBroker(50000)
       const exec = new OrderExecutor({ broker, loadExecutionConfig: async () => cfg, loadRiskConfig: async () => DEFAULT_RISK_CFG })
       const op = makeOp()
-      op.spec = { ...op.spec, action: 'placeOrder', side: 'short' } as never
+      // Override TPs to BELOW live so they survive the crossing filter
+      // (a short's TPs must be below live to be valid bid-side fills).
+      op.spec = {
+        ...op.spec,
+        action: 'placeOrder',
+        side: 'short',
+        takeProfits: [
+          { level: 1, price: '49000' },
+          { level: 2, price: '48000' },
+          { level: 3, price: '47000' },
+        ],
+      } as never
 
       await exec.execute(op)
       expect(calls.placeOrder[0]?.side).toBe('sell')   // open

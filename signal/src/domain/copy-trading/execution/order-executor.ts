@@ -127,7 +127,28 @@ export class OrderExecutor {
       this.assertSlippageOk(op, refPrice, cfg.slippageTolerancePercent)
     }
 
-    // ── 4. Dry-run short-circuit
+    // ── 4. TP filter — drop levels the live price has already crossed
+    // (long: TP below live; short: TP above live). Such reduce-only
+    // limits would fill instantly on position open. Computed here so
+    // dry-run sees the same surviving set as live would.
+    const validTps = (spec.takeProfits ?? []).filter((tp) => {
+      const v = Number(tp.price)
+      if (!Number.isFinite(v) || v <= 0) return false
+      return spec.side === 'long' ? v > refPrice : v < refPrice
+    })
+    if (spec.takeProfits && validTps.length < spec.takeProfits.length) {
+      const skipped = spec.takeProfits.filter((tp) => !validTps.includes(tp))
+      logger.warn(
+        {
+          opId: op.id,
+          live: refPrice,
+          skipped: skipped.map((tp) => ({ level: tp.level, price: tp.price })),
+        },
+        `OrderExecutor: ${skipped.length} TP(s) already crossed by live price — skipping`,
+      )
+    }
+
+    // ── 5. Dry-run short-circuit
     if (cfg.mode === 'dry-run') {
       logger.info(
         {
@@ -137,6 +158,7 @@ export class OrderExecutor {
           notional: notional.toFixed(2),
           amount: amount.toFixed(8),
           refPrice: refPrice.toFixed(2),
+          validTps: validTps.map((tp) => tp.level),
         },
         'OrderExecutor: DRY-RUN — would have placed order',
       )
@@ -144,7 +166,7 @@ export class OrderExecutor {
         mainOrderId: `DRYRUN-${op.id}`,
         slAttachedToMain: spec.stopLoss != null,
         tpAttachedToMain: false,  // TPs are standalone reduce-only orders now
-        extraTpOrderIds: (spec.takeProfits ?? []).map((tp) => `DRYRUN-tp${tp.level}-${op.id}`),
+        extraTpOrderIds: validTps.map((tp) => `DRYRUN-tp${tp.level}-${op.id}`),
         filledAt: new Date().toISOString(),
         refPrice: refPrice.toFixed(2),
         amount: amount.toFixed(8),
@@ -211,13 +233,19 @@ export class OrderExecutor {
     // distribution. Best-effort: if individual TP orders fail (e.g. price
     // too far from market on a tiny altcoin), log and continue — the SL
     // is already attached so the position is at least bounded.
+    //
+    // Filter out TPs that the live price has already crossed (long: TP
+    // below live; short: TP above live). Such reduce-only limit orders
+    // would fill instantly upon position open — turning the meant-to-be
+    // multi-TP ladder into "open and immediately close half the position
+    // for whatever the current market gives." Filter computed earlier
+    // (step 4) is reused here so live and dry-run see the same set.
     const closeSide = this.closeSide(spec)
     const tpOrderIds: string[] = []
-    const tps = spec.takeProfits ?? []
-    if (tps.length > 0) {
-      const tpAmounts = distributeTpAmounts(amount, tps.length, riskCfg.tpDistribution)
-      for (let i = 0; i < tps.length; i++) {
-        const tp = tps[i]
+    if (validTps.length > 0) {
+      const tpAmounts = distributeTpAmounts(amount, validTps.length, riskCfg.tpDistribution)
+      for (let i = 0; i < validTps.length; i++) {
+        const tp = validTps[i]
         const perTpAmount = tpAmounts[i]
         try {
           const order = await this.deps.broker.placeOrder({
