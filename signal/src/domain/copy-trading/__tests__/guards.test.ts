@@ -27,6 +27,20 @@ describe('LowConfidenceGuard', () => {
 
 describe('StaleSignalGuard', () => {
   const g = new StaleSignalGuard()
+  // makeOperation defaults to a limit order, which the guard now exempts;
+  // build a market-order op for the tests that need to verify rejection.
+  const marketOp = makeOperation({
+    spec: {
+      action: 'placeOrder',
+      symbol: 'BTC',
+      side: 'long',
+      contractType: 'perpetual',
+      orderType: 'market',
+      size: { unit: 'absolute', value: '90' },
+      leverage: 10,
+    },
+  })
+
   it('passes when no priceCheck', () => {
     expect(g.check(makeCtx({ signal: makeSignal({ priceCheck: undefined }) }))).toBeNull()
   })
@@ -35,14 +49,28 @@ describe('StaleSignalGuard', () => {
       signal: makeSignal({ priceCheck: { currentPrice: '76500', source: 'binance', fetchedAt: 'x', stale: false } }),
     }))).toBeNull()
   })
-  it('rejects when stale, includes distance in reason', () => {
+  it('rejects a market order when stale, includes distance in reason', () => {
     const r = g.check(makeCtx({
+      operation: marketOp,
       signal: makeSignal({
         priceCheck: { currentPrice: '78000', source: 'binance', fetchedAt: 'x', stale: true, entryDistancePercent: '-2.5' },
       }),
     }))
     expect(r).toMatch(/stale/)
     expect(r).toContain('-2.5%')
+  })
+  // Limit orders intentionally sit on the "wrong" side of the live price
+  // waiting for a pullback. They should never trip the stale guard even
+  // when priceCheck.stale is true (e.g. TAO short 411.84 with live 310.94 —
+  // the order will simply not fill until price rebounds).
+  it('passes a stale-flagged LIMIT order — limits wait for the pullback', () => {
+    const r = g.check(makeCtx({
+      // makeCtx default operation is already limit (see helpers)
+      signal: makeSignal({
+        priceCheck: { currentPrice: '310.94', source: 'binance', fetchedAt: 'x', stale: true, entryDistancePercent: '32.45' },
+      }),
+    }))
+    expect(r).toBeNull()
   })
 })
 

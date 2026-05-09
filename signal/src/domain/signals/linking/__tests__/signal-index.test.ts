@@ -130,6 +130,32 @@ describe('SignalIndex.findOpenByKolAndSymbol()', () => {
     expect(results[0].parsedAt).toBe(past)
   })
 
+  // Regression: a real Neil "BIO long" signal opened with symbol "BIO",
+  // then a "TP1 hit" update came in with symbol "BIOUSDT" (LLM read it
+  // off a BloFin TP receipt image). Strict-equality matching dropped
+  // the link; normalising both to base "BIO" lets it succeed.
+  it('matches when signal and update use different shapes of the same symbol', () => {
+    const index = new SignalIndex()
+    index.add(makeSignal({ kolId: 'kol-a', symbol: 'BIO' }))
+
+    // BloFin-style ticker — should still find the BIO signal
+    const r1 = index.findOpenByKolAndSymbol('kol-a', 'BIOUSDT', new Date())
+    expect(r1).toHaveLength(1)
+    expect(r1[0].symbol).toBe('BIO')
+
+    // CCXT shape — should also find it
+    const r2 = index.findOpenByKolAndSymbol('kol-a', 'BIO/USDT:USDT', new Date())
+    expect(r2).toHaveLength(1)
+
+    // $-decorated — should also find it
+    const r3 = index.findOpenByKolAndSymbol('kol-a', '$BIO', new Date())
+    expect(r3).toHaveLength(1)
+
+    // Different base — should NOT match
+    const r4 = index.findOpenByKolAndSymbol('kol-a', 'ETHUSDT', new Date())
+    expect(r4).toHaveLength(0)
+  })
+
   it('returns most recent first when multiple signals match', () => {
     const index = new SignalIndex()
     const older = makeSignal({

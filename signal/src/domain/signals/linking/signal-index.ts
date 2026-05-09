@@ -1,5 +1,21 @@
 import type { Signal } from '../../../../../shared/types.js'
+import { normalizeSymbol } from '../../../connectors/market/symbol-normalize.js'
 import type { ISignalIndex } from './types.js'
+
+/**
+ * Reduce a raw symbol string to a comparable key. Normalising both the
+ * signal's and the update's symbol means "BIO" (what Neil typed in the
+ * open) and "BIOUSDT" (what the LLM read off the BloFin TP receipt
+ * card) collapse to the same key "BIO" and link successfully.
+ *
+ * Falls back to a trimmed-uppercase form so unknown shapes still get a
+ * deterministic key (better than throwing or returning null when the
+ * normaliser doesn't recognise the format).
+ */
+function symbolKey(raw: string): string {
+  const norm = normalizeSymbol(raw)
+  return norm?.base ?? raw.trim().toUpperCase()
+}
 
 /**
  * In-memory index of still-open signals, rebuilt from disk on startup.
@@ -34,11 +50,12 @@ export class SignalIndex implements ISignalIndex {
     symbol: string,
     before: Date,
   ): Signal[] {
+    const targetKey = symbolKey(symbol)
     const results: Signal[] = []
     for (const signal of this.bySignalId.values()) {
       if (
         signal.kolId === kolId &&
-        signal.symbol === symbol &&
+        symbolKey(signal.symbol) === targetKey &&
         new Date(signal.parsedAt) <= before
       ) {
         results.push(signal)
