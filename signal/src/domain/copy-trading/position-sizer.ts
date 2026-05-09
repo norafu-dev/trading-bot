@@ -74,6 +74,15 @@ export class PositionSizer {
       defaultQuote: kol.defaultSymbolQuote,
     })
 
+    // Truncate to the configured max TPs. KOLs sometimes specify 5-7 TP
+    // levels, of which the last few rarely get hit and just clutter the
+    // exchange's open-orders list with reduce-only orders that occupy
+    // margin slots forever.
+    const truncatedTps =
+      signal.takeProfits && signal.takeProfits.length > 0
+        ? signal.takeProfits.slice(0, Math.max(1, riskConfig.maxTakeProfits))
+        : undefined
+
     const spec: OperationSpec = {
       action: 'placeOrder',
       symbol: normalised?.ccxtSymbol ?? signal.symbol,
@@ -84,7 +93,7 @@ export class PositionSizer {
       size: { unit: 'absolute', value: notional.toFixed(2) },
       ...(signal.leverage !== undefined && { leverage: signal.leverage }),
       ...(signal.stopLoss?.price !== undefined && { stopLoss: { price: signal.stopLoss.price } }),
-      ...(signal.takeProfits && signal.takeProfits.length > 0 && { takeProfits: signal.takeProfits }),
+      ...(truncatedTps && truncatedTps.length > 0 && { takeProfits: truncatedTps }),
     }
 
     return {

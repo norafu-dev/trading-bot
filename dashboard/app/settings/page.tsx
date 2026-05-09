@@ -386,11 +386,18 @@ function Inner({
   const [maxOp, setMaxOp] = useState(String(config.maxOperationSizePercent));
   const [whitelist, setWhitelist] = useState(config.symbolWhitelist.join(", "));
   const [cooldown, setCooldown] = useState(String(config.cooldownMinutes));
+  const [maxTps, setMaxTps] = useState(String(config.maxTakeProfits));
+  // tpDistribution can also be a custom array but we surface presets
+  // only in the UI — array form is power-user, edit via risk.json.
+  const distString = Array.isArray(config.tpDistribution) ? "even" : config.tpDistribution;
+  const [tpDist, setTpDist] = useState<"even" | "front-heavy" | "back-heavy">(distString);
 
   const dirty =
     Number(base) !== config.baseRiskPercent ||
     Number(maxOp) !== config.maxOperationSizePercent ||
     Number(cooldown) !== config.cooldownMinutes ||
+    Number(maxTps) !== config.maxTakeProfits ||
+    tpDist !== distString ||
     whitelist !== config.symbolWhitelist.join(", ");
 
   async function handleSave() {
@@ -402,6 +409,8 @@ function Inner({
         maxOperationSizePercent: Number(maxOp),
         symbolWhitelist: whitelist.split(",").map((s) => s.trim()).filter(Boolean),
         cooldownMinutes: Number(cooldown),
+        maxTakeProfits: Number(maxTps),
+        tpDistribution: tpDist,
       });
       onChange(updated);
       setSavedAt(Date.now());
@@ -482,6 +491,41 @@ function Inner({
           <p className="mt-1 text-[11px] text-muted-foreground">
             同 KOL 同 symbol 两次操作的最小间隔
           </p>
+        </div>
+
+        {/* ── 止盈策略 ───────────────────────────────────────────── */}
+        <div className="rounded-lg border border-border bg-muted/30 p-4 space-y-4">
+          <div className="text-sm font-medium text-foreground">止盈策略</div>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div>
+              <label className={labelClass}>最多保留几个止盈点</label>
+              <input
+                type="number" step="1" min="1" max="10"
+                className={inputClass}
+                value={maxTps}
+                onChange={(e) => setMaxTps(e.target.value)}
+              />
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                超出的 TP 直接舍弃。KOL 喊 5 个 TP、设 3 → 只用 TP1/2/3
+              </p>
+            </div>
+            <div>
+              <label className={labelClass}>仓位分配方式</label>
+              <select
+                className={inputClass}
+                value={tpDist}
+                onChange={(e) => setTpDist(e.target.value as "even" | "front-heavy" | "back-heavy")}
+              >
+                <option value="even">均分（4个TP → 25/25/25/25）</option>
+                <option value="front-heavy">前重后轻（→ 40/30/20/10）</option>
+                <option value="back-heavy">后重前轻（→ 10/20/30/40）</option>
+              </select>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                每个 TP 平多少仓位。前重 = 早兑现保本；后重 = 让利润奔跑
+              </p>
+            </div>
+          </div>
         </div>
 
         <div className="flex justify-end pt-2">

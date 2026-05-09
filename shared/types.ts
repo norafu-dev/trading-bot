@@ -636,4 +636,33 @@ export interface RiskConfig {
 
   /** Cooldown — minutes between two same-(kol, symbol) operations. */
   cooldownMinutes: number
+
+  /**
+   * Cap on how many take-profit levels we actually execute, regardless of
+   * how many the KOL specified. Useful because some KOLs sprinkle 5-7 TPs
+   * the last few of which almost never get hit — those reduce-only orders
+   * just sit there occupying margin / mental load. The cap keeps the first
+   * N levels (TP1..TPN by `level`) and discards the rest.
+   *
+   * Default: 3. Set high (e.g. 10) to keep all levels the KOL gives.
+   */
+  maxTakeProfits: number
+
+  /**
+   * How position size is split across take-profit levels. The executor
+   * places one reduce-only limit order per TP after the main order
+   * fills, sized according to this distribution. Total always sums to
+   * 100% of the position.
+   *
+   * - "even": split equally (4 TPs → 25% each)
+   * - "front-heavy": de-risk early, let the rest run (4 TPs → 40/30/20/10)
+   * - "back-heavy": let the position run (4 TPs → 10/20/30/40)
+   * - number[]: custom per-level percentages, e.g. [50, 30, 20].
+   *   Length doesn't have to match TP count: shorter → padded with the
+   *   tail evenly distributed; longer → truncated. Values are normalised
+   *   so the sum is 100% regardless of input.
+   *
+   * Default: "even".
+   */
+  tpDistribution: 'even' | 'front-heavy' | 'back-heavy' | number[]
 }

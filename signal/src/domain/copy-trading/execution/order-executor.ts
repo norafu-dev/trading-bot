@@ -28,9 +28,11 @@ import type { ExecutionConfig } from '../../../core/execution-config.js'
 import type {
   Operation,
   OperationSpec,
+  RiskConfig,
 } from '../../../../../shared/types.js'
 import type { ICryptoBroker, OrderSide } from './crypto-broker.js'
 import { classifyError } from './error-classifier.js'
+import { distributeTpAmounts } from './tp-distribution.js'
 
 // `placeOrder` action narrowed once the ApprovalService has handed us a real op.
 type OpenOrderSpec = Extract<OperationSpec, { action: 'placeOrder' }>
@@ -76,6 +78,13 @@ export interface OrderExecutorDeps {
    * `mode: dry-run | live` take effect immediately, without process restart.
    */
   loadExecutionConfig: () => Promise<ExecutionConfig>
+  /**
+   * Reads the LATEST risk config — used here for `tpDistribution` (how
+   * the position is split across TP levels). Loaded per-execute for the
+   * same reason: dashboard edits should land on the next operation
+   * without requiring a restart.
+   */
+  loadRiskConfig: () => Promise<RiskConfig>
 }
 
 export class OrderExecutor {
@@ -98,6 +107,7 @@ export class OrderExecutor {
     }
     const spec = op.spec
     const cfg = await this.deps.loadExecutionConfig()
+    const riskCfg = await this.deps.loadRiskConfig()
 
     // ── 1. Fetch ticker — also serves as a connectivity smoke test
     const refPrice = await this.fetchRefPrice(spec.symbol)
@@ -133,8 +143,8 @@ export class OrderExecutor {
       return {
         mainOrderId: `DRYRUN-${op.id}`,
         slAttachedToMain: spec.stopLoss != null,
-        tpAttachedToMain: (spec.takeProfits?.length ?? 0) > 0,
-        extraTpOrderIds: [],
+        tpAttachedToMain: false,  // TPs are standalone reduce-only orders now
+        extraTpOrderIds: (spec.takeProfits ?? []).map((tp) => `DRYRUN-tp${tp.level}-${op.id}`),
         filledAt: new Date().toISOString(),
         refPrice: refPrice.toFixed(2),
         amount: amount.toFixed(8),
@@ -157,12 +167,20 @@ export class OrderExecutor {
       }
     }
 
-    // First TP rides along on the main order via ccxt unified params.
-    // Extra TPs (level >= 2) get separate reduce-only limit orders below.
-    const firstTp = spec.takeProfits?.[0]
+    // SL rides along on the main order via ccxt unified `stopLossPrice`
+    // param — broker closes the WHOLE position if SL trips, which is
+    // the right semantic ("we're stopped out, exit everything"). TPs
+    // are placed AFTER the main fills, each as a sized reduce-only
+    // limit order so partial fills work as the operator expects (TP1
+    // closes 25%, TP2 closes the next 25%, etc).
+    //
+    // Why TPs are NOT folded into `takeProfitPrice`: that param has no
+    // size argument, so brokers default to "close 100% of the position"
+    // when it triggers — exactly the bug we're fixing here. Placing
+    // sized reduce-only limits gives precise control over multi-TP
+    // ladder distributions.
     const params: Record<string, unknown> = {}
     if (spec.stopLoss?.price) params['stopLossPrice'] = Number(spec.stopLoss.price)
-    if (firstTp?.price) params['takeProfitPrice'] = Number(firstTp.price)
 
     let mainOrderId: string
     try {
@@ -188,17 +206,19 @@ export class OrderExecutor {
       )
     }
 
-    // Extra TPs — best-effort. If one fails, log and continue; the main
-    // position is already protected by SL + TP1 attached above.
+    // ── TP ladder ────────────────────────────────────────────────────
+    // Place one reduce-only limit per TP level, sized per the configured
+    // distribution. Best-effort: if individual TP orders fail (e.g. price
+    // too far from market on a tiny altcoin), log and continue — the SL
+    // is already attached so the position is at least bounded.
     const closeSide = this.closeSide(spec)
-    const extraTpOrderIds: string[] = []
-    const extras = (spec.takeProfits ?? []).slice(1)
-    if (extras.length > 0) {
-      // Split the position evenly across extra TPs. (TP1 is on the main
-      // order — no portion of the position is reserved for it here, since
-      // exchanges reduce TP1 fill from the position automatically.)
-      const perTpAmount = amount / (extras.length + 1)
-      for (const tp of extras) {
+    const tpOrderIds: string[] = []
+    const tps = spec.takeProfits ?? []
+    if (tps.length > 0) {
+      const tpAmounts = distributeTpAmounts(amount, tps.length, riskCfg.tpDistribution)
+      for (let i = 0; i < tps.length; i++) {
+        const tp = tps[i]
+        const perTpAmount = tpAmounts[i]
         try {
           const order = await this.deps.broker.placeOrder({
             symbol: spec.symbol,
@@ -208,11 +228,11 @@ export class OrderExecutor {
             price: Number(tp.price),
             params: { reduceOnly: true },
           })
-          if (order.id) extraTpOrderIds.push(order.id)
+          if (order.id) tpOrderIds.push(order.id)
         } catch (err) {
           logger.warn(
             { err, opId: op.id, tpLevel: tp.level, tpPrice: tp.price },
-            'OrderExecutor: extra TP order failed — main position still has SL + TP1',
+            'OrderExecutor: TP order failed — main position still has SL attached',
           )
         }
       }
@@ -221,8 +241,8 @@ export class OrderExecutor {
     return {
       mainOrderId,
       slAttachedToMain: spec.stopLoss != null,
-      tpAttachedToMain: firstTp != null,
-      extraTpOrderIds,
+      tpAttachedToMain: false,  // TPs are now standalone reduce-only orders, never on main
+      extraTpOrderIds: tpOrderIds,  // legacy field name preserved; carries ALL TP orders now
       filledAt: new Date().toISOString(),
       refPrice: refPrice.toFixed(2),
       amount: amount.toFixed(8),

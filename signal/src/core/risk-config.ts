@@ -20,6 +20,17 @@ export const riskConfigSchema = z.object({
   maxOperationSizePercent: z.number().min(0).max(100).default(5),
   symbolWhitelist: z.array(z.string()).default([]),
   cooldownMinutes: z.number().min(0).default(5),
+  // ── TP execution policy ──────────────────────────────────────────
+  // 0 < cap; capped at 10 to keep validation explicit. KOLs writing
+  // more than 10 TPs are extremely rare; the cap keeps validation
+  // explicit and the UI bounded.
+  maxTakeProfits: z.number().int().min(1).max(10).default(3),
+  // String preset OR custom percentages array. Each array entry must
+  // be > 0; we don't enforce sum=100 here — the executor normalises.
+  tpDistribution: z.union([
+    z.enum(['even', 'front-heavy', 'back-heavy']),
+    z.array(z.number().positive()).min(1),
+  ]).default('even'),
 })
 
 export const riskConfigUpdateSchema = riskConfigSchema.partial()

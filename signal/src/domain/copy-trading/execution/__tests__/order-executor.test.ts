@@ -45,6 +45,18 @@ const DEFAULT_CFG: ExecutionConfig = {
   marginMode: 'isolated',
 }
 
+// Risk config for the executor's TP-distribution lookup. Tests that care
+// about specific distributions override per-test; this default is "even"
+// so the existing assertions about evenly-split extra-TP amounts hold.
+const DEFAULT_RISK_CFG: import('../../../../../../shared/types.js').RiskConfig = {
+  baseRiskPercent: 1,
+  maxOperationSizePercent: 5,
+  symbolWhitelist: [],
+  cooldownMinutes: 5,
+  maxTakeProfits: 10,        // tests pass arbitrary TP counts; don't truncate
+  tpDistribution: 'even',
+}
+
 interface MockCalls {
   ticker: number
   setLeverage: PlaceOrderInput[] // unused shape, just for symmetry
@@ -86,7 +98,7 @@ describe('OrderExecutor', () => {
     it('skips broker entirely and returns DRYRUN- prefixed id', async () => {
       cfg.mode = 'dry-run'
       const { broker, calls } = makeMockBroker(50000)
-      const exec = new OrderExecutor({ broker, loadExecutionConfig: async () => cfg })
+      const exec = new OrderExecutor({ broker, loadExecutionConfig: async () => cfg, loadRiskConfig: async () => DEFAULT_RISK_CFG })
       const result = await exec.execute(makeOp())
 
       expect(result.mainOrderId).toBe('DRYRUN-01OPTEST00000000000000000A')
@@ -98,7 +110,7 @@ describe('OrderExecutor', () => {
     it('records the computed amount and refPrice', async () => {
       cfg.mode = 'dry-run'
       const { broker } = makeMockBroker(50000)
-      const exec = new OrderExecutor({ broker, loadExecutionConfig: async () => cfg })
+      const exec = new OrderExecutor({ broker, loadExecutionConfig: async () => cfg, loadRiskConfig: async () => DEFAULT_RISK_CFG })
       const op = makeOp()
       // limit order at 50000, notional 50 → 0.001 BTC
       op.spec = { ...op.spec, action: 'placeOrder', orderType: 'limit', price: '50000' } as never
@@ -112,7 +124,7 @@ describe('OrderExecutor', () => {
   describe('live — main order', () => {
     it('converts USDT notional to base amount via ticker', async () => {
       const { broker, calls } = makeMockBroker(50000)
-      const exec = new OrderExecutor({ broker, loadExecutionConfig: async () => cfg })
+      const exec = new OrderExecutor({ broker, loadExecutionConfig: async () => cfg, loadRiskConfig: async () => DEFAULT_RISK_CFG })
       const op = makeOp()
       // remove TPs to keep this test focused on the main order
       op.spec = { ...op.spec, action: 'placeOrder', takeProfits: [] } as never
@@ -124,7 +136,7 @@ describe('OrderExecutor', () => {
 
     it('uses limit price (not ticker) for limit-order sizing', async () => {
       const { broker, calls } = makeMockBroker(50500)  // ticker drifts up
-      const exec = new OrderExecutor({ broker, loadExecutionConfig: async () => cfg })
+      const exec = new OrderExecutor({ broker, loadExecutionConfig: async () => cfg, loadRiskConfig: async () => DEFAULT_RISK_CFG })
       const op = makeOp()
       op.spec = {
         ...op.spec,
@@ -142,7 +154,7 @@ describe('OrderExecutor', () => {
 
     it('maps long → buy and short → sell', async () => {
       const { broker, calls } = makeMockBroker(50000)
-      const exec = new OrderExecutor({ broker, loadExecutionConfig: async () => cfg })
+      const exec = new OrderExecutor({ broker, loadExecutionConfig: async () => cfg, loadRiskConfig: async () => DEFAULT_RISK_CFG })
 
       const opLong = makeOp()
       opLong.spec = { ...opLong.spec, action: 'placeOrder', takeProfits: [] } as never
@@ -156,54 +168,87 @@ describe('OrderExecutor', () => {
       expect(calls.placeOrder[0]?.side).toBe('sell')
     })
 
-    it('attaches stopLossPrice and takeProfitPrice (level 1) to the main order', async () => {
+    it('attaches only stopLossPrice (not takeProfitPrice) to the main order', async () => {
+      // Why: takeProfitPrice has no size argument, so brokers default to
+      // closing 100% of the position when it triggers — defeating multi-TP
+      // ladders. We now place TPs as standalone reduce-only limits.
       const { broker, calls } = makeMockBroker(50000)
-      const exec = new OrderExecutor({ broker, loadExecutionConfig: async () => cfg })
+      const exec = new OrderExecutor({ broker, loadExecutionConfig: async () => cfg, loadRiskConfig: async () => DEFAULT_RISK_CFG })
 
       await exec.execute(makeOp())
       const main = calls.placeOrder[0]!
       expect(main.params?.['stopLossPrice']).toBe(49000)
-      expect(main.params?.['takeProfitPrice']).toBe(52000)
+      expect(main.params?.['takeProfitPrice']).toBeUndefined()
     })
 
-    it('places extra TPs (level >= 2) as separate reduce-only limit orders', async () => {
+    it('places ALL TPs (including TP1) as reduce-only limit orders', async () => {
       const { broker, calls } = makeMockBroker(50000)
-      const exec = new OrderExecutor({ broker, loadExecutionConfig: async () => cfg })
+      const exec = new OrderExecutor({ broker, loadExecutionConfig: async () => cfg, loadRiskConfig: async () => DEFAULT_RISK_CFG })
 
       const result = await exec.execute(makeOp())
-      // 1 main + 2 extras (TP2, TP3)
-      expect(calls.placeOrder).toHaveLength(3)
-      expect(result.extraTpOrderIds).toHaveLength(2)
+      // 1 main + 3 TPs (TP1, TP2, TP3)
+      expect(calls.placeOrder).toHaveLength(4)
+      expect(result.extraTpOrderIds).toHaveLength(3)
+      // TPs are reduce-only and at the right prices, in level order
       expect(calls.placeOrder[1]?.params?.['reduceOnly']).toBe(true)
-      expect(calls.placeOrder[1]?.price).toBe(54000)  // TP2
-      expect(calls.placeOrder[2]?.price).toBe(56000)  // TP3
+      expect(calls.placeOrder[1]?.price).toBe(52000)  // TP1
+      expect(calls.placeOrder[2]?.price).toBe(54000)  // TP2
+      expect(calls.placeOrder[3]?.price).toBe(56000)  // TP3
+    })
+
+    it('splits position evenly across TPs by default (3 TPs → 1/3 each)', async () => {
+      const { broker, calls } = makeMockBroker(50000)
+      const exec = new OrderExecutor({ broker, loadExecutionConfig: async () => cfg, loadRiskConfig: async () => DEFAULT_RISK_CFG })
+
+      await exec.execute(makeOp())  // 50 USDT / 50000 = 0.001 BTC total, 3 TPs → ~0.000333 each
+      const tp1Amount = calls.placeOrder[1]?.amount
+      const tp2Amount = calls.placeOrder[2]?.amount
+      const tp3Amount = calls.placeOrder[3]?.amount
+      expect(tp1Amount).toBeCloseTo(0.001 / 3, 8)
+      expect(tp2Amount).toBeCloseTo(0.001 / 3, 8)
+      expect(tp3Amount).toBeCloseTo(0.001 / 3, 8)
+      // Sum exactly equals main amount (last bucket absorbs rounding crumbs)
+      expect((tp1Amount ?? 0) + (tp2Amount ?? 0) + (tp3Amount ?? 0)).toBeCloseTo(0.001, 12)
+    })
+
+    it('honours tpDistribution=front-heavy', async () => {
+      const { broker, calls } = makeMockBroker(50000)
+      const riskCfg = { ...DEFAULT_RISK_CFG, tpDistribution: 'front-heavy' as const }
+      const exec = new OrderExecutor({ broker, loadExecutionConfig: async () => cfg, loadRiskConfig: async () => riskCfg })
+
+      await exec.execute(makeOp())
+      // 3 TPs → weights [3,2,1] → fractions 0.5/0.333/0.167
+      expect(calls.placeOrder[1]?.amount).toBeCloseTo(0.0005, 8)        // 50%
+      expect(calls.placeOrder[2]?.amount).toBeCloseTo(0.001 / 3, 8)     // ~33%
+      expect(calls.placeOrder[3]?.amount).toBeCloseTo(0.001 / 6, 8)     // ~17%
     })
 
     it('reduce-only TPs use the closing side (long → sell, short → buy)', async () => {
       const { broker, calls } = makeMockBroker(50000)
-      const exec = new OrderExecutor({ broker, loadExecutionConfig: async () => cfg })
+      const exec = new OrderExecutor({ broker, loadExecutionConfig: async () => cfg, loadRiskConfig: async () => DEFAULT_RISK_CFG })
       const op = makeOp()
       op.spec = { ...op.spec, action: 'placeOrder', side: 'short' } as never
 
       await exec.execute(op)
       expect(calls.placeOrder[0]?.side).toBe('sell')   // open
-      expect(calls.placeOrder[1]?.side).toBe('buy')    // close TP2
+      expect(calls.placeOrder[1]?.side).toBe('buy')    // close TP1
     })
 
-    it('continues on extra-TP failure but records main success', async () => {
+    it('continues on per-TP failure but records main success', async () => {
+      // Sequence: 1=main, 2=TP1, 3=TP2 (fails), 4=TP3
       let n = 0
       const { broker, calls } = makeMockBroker(50000, async () => {
         n++
-        if (n === 2) throw new ccxt.InvalidOrder('TP price too far')
+        if (n === 3) throw new ccxt.InvalidOrder('TP price too far')
         return { id: `o-${n}` } as CcxtOrder
       })
-      const exec = new OrderExecutor({ broker, loadExecutionConfig: async () => cfg })
+      const exec = new OrderExecutor({ broker, loadExecutionConfig: async () => cfg, loadRiskConfig: async () => DEFAULT_RISK_CFG })
 
       const result = await exec.execute(makeOp())
       expect(result.mainOrderId).toBe('o-1')
-      // TP2 failed, TP3 still placed
-      expect(result.extraTpOrderIds).toEqual(['o-3'])
-      expect(calls.placeOrder).toHaveLength(3)
+      // TP1 + TP3 succeeded, TP2 failed silently
+      expect(result.extraTpOrderIds).toEqual(['o-2', 'o-4'])
+      expect(calls.placeOrder).toHaveLength(4)
     })
   })
 
@@ -211,7 +256,7 @@ describe('OrderExecutor', () => {
     it('refuses orders above maxOrderUsdt', async () => {
       cfg.maxOrderUsdt = 30  // op notional is 50
       const { broker } = makeMockBroker(50000)
-      const exec = new OrderExecutor({ broker, loadExecutionConfig: async () => cfg })
+      const exec = new OrderExecutor({ broker, loadExecutionConfig: async () => cfg, loadRiskConfig: async () => DEFAULT_RISK_CFG })
 
       await expect(exec.execute(makeOp())).rejects.toMatchObject({
         category: 'invalid-order',
@@ -222,7 +267,7 @@ describe('OrderExecutor', () => {
     it('skips setLeverage when setLeverage=false', async () => {
       cfg.setLeverage = false
       const { broker, setLeverageMock } = makeMockBroker(50000)
-      const exec = new OrderExecutor({ broker, loadExecutionConfig: async () => cfg })
+      const exec = new OrderExecutor({ broker, loadExecutionConfig: async () => cfg, loadRiskConfig: async () => DEFAULT_RISK_CFG })
 
       await exec.execute(makeOp())
       expect(setLeverageMock).not.toHaveBeenCalled()
@@ -230,7 +275,7 @@ describe('OrderExecutor', () => {
 
     it('skips setLeverage on spot operations', async () => {
       const { broker, setLeverageMock } = makeMockBroker(50000)
-      const exec = new OrderExecutor({ broker, loadExecutionConfig: async () => cfg })
+      const exec = new OrderExecutor({ broker, loadExecutionConfig: async () => cfg, loadRiskConfig: async () => DEFAULT_RISK_CFG })
       const op = makeOp()
       op.spec = { ...op.spec, action: 'placeOrder', contractType: 'spot' } as never
 
@@ -242,7 +287,7 @@ describe('OrderExecutor', () => {
       const { broker } = makeMockBroker(50000, async () => {
         throw new ccxt.AuthenticationError('bad key')
       })
-      const exec = new OrderExecutor({ broker, loadExecutionConfig: async () => cfg })
+      const exec = new OrderExecutor({ broker, loadExecutionConfig: async () => cfg, loadRiskConfig: async () => DEFAULT_RISK_CFG })
 
       await expect(exec.execute(makeOp())).rejects.toMatchObject({
         category: 'auth',
@@ -253,7 +298,7 @@ describe('OrderExecutor', () => {
       const { broker } = makeMockBroker(50000, async () => {
         throw new ccxt.InsufficientFunds('not enough')
       })
-      const exec = new OrderExecutor({ broker, loadExecutionConfig: async () => cfg })
+      const exec = new OrderExecutor({ broker, loadExecutionConfig: async () => cfg, loadRiskConfig: async () => DEFAULT_RISK_CFG })
 
       const err = await exec.execute(makeOp()).catch((e) => e)
       expect(err).toBeInstanceOf(ExecutionError)
@@ -262,7 +307,7 @@ describe('OrderExecutor', () => {
 
     it('rejects size.unit other than absolute', async () => {
       const { broker } = makeMockBroker(50000)
-      const exec = new OrderExecutor({ broker, loadExecutionConfig: async () => cfg })
+      const exec = new OrderExecutor({ broker, loadExecutionConfig: async () => cfg, loadRiskConfig: async () => DEFAULT_RISK_CFG })
       const op = makeOp()
       op.spec = {
         ...op.spec,
@@ -282,7 +327,7 @@ describe('OrderExecutor', () => {
         placeOrder: vi.fn(),
         cancelOrder: vi.fn(),
       }
-      const exec = new OrderExecutor({ broker, loadExecutionConfig: async () => cfg })
+      const exec = new OrderExecutor({ broker, loadExecutionConfig: async () => cfg, loadRiskConfig: async () => DEFAULT_RISK_CFG })
 
       await expect(exec.execute(makeOp())).rejects.toMatchObject({
         category: 'invalid-order',
@@ -294,7 +339,7 @@ describe('OrderExecutor', () => {
   describe('non-placeOrder ops', () => {
     it('throws invalid-order for unsupported actions', async () => {
       const { broker } = makeMockBroker(50000)
-      const exec = new OrderExecutor({ broker, loadExecutionConfig: async () => cfg })
+      const exec = new OrderExecutor({ broker, loadExecutionConfig: async () => cfg, loadRiskConfig: async () => DEFAULT_RISK_CFG })
       const op = makeOp()
       // @ts-expect-error — testing runtime guard
       op.spec = { action: 'closePosition', symbol: 'X' }

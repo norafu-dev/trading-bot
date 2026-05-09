@@ -8,6 +8,8 @@ const DEFAULT_RISK: RiskConfig = {
   maxOperationSizePercent: 5,
   symbolWhitelist: [],
   cooldownMinutes: 5,
+  maxTakeProfits: 10,        // tests pass 0..3 TPs, never need truncation
+  tpDistribution: 'even',
 }
 
 describe('PositionSizer', () => {
@@ -182,5 +184,44 @@ describe('PositionSizer', () => {
     })
     if (op.spec.action !== 'placeOrder') throw new Error()
     expect(op.spec.symbol).toBe('BTC/USDC')
+  })
+
+  // ── maxTakeProfits truncation ──────────────────────────────────────
+  // KOLs sometimes sprinkle 5-7 TPs the last few of which rarely hit;
+  // operator can cap how many we actually execute via riskConfig.
+  it('truncates take-profits to riskConfig.maxTakeProfits', () => {
+    const op = sizer.size({
+      signal: makeSignal({
+        takeProfits: [
+          { level: 1, price: '50000' },
+          { level: 2, price: '52000' },
+          { level: 3, price: '54000' },
+          { level: 4, price: '56000' },
+          { level: 5, price: '58000' },
+        ],
+      }),
+      kol: makeKol(),
+      account: makeAccount(),
+      riskConfig: { ...DEFAULT_RISK, maxTakeProfits: 3 },
+    })
+    if (op.spec.action !== 'placeOrder') throw new Error()
+    expect(op.spec.takeProfits).toHaveLength(3)
+    expect(op.spec.takeProfits!.map((tp) => tp.level)).toEqual([1, 2, 3])
+  })
+
+  it('keeps fewer TPs unchanged when below the cap', () => {
+    const op = sizer.size({
+      signal: makeSignal({
+        takeProfits: [
+          { level: 1, price: '50000' },
+          { level: 2, price: '52000' },
+        ],
+      }),
+      kol: makeKol(),
+      account: makeAccount(),
+      riskConfig: { ...DEFAULT_RISK, maxTakeProfits: 5 },
+    })
+    if (op.spec.action !== 'placeOrder') throw new Error()
+    expect(op.spec.takeProfits).toHaveLength(2)
   })
 })

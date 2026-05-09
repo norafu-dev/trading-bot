@@ -58,6 +58,7 @@ import { BrokerDispatcher } from './domain/copy-trading/execution/broker-dispatc
 import { CcxtCryptoBroker } from './domain/copy-trading/execution/crypto-broker.js'
 import { OrderExecutor } from './domain/copy-trading/execution/order-executor.js'
 import { loadExecutionConfig } from './core/execution-config.js'
+import { loadRiskConfig } from './core/risk-config.js'
 import { createCcxtInstance } from './domain/trading/ccxt-pool.js'
 import { loadTelegramConfig } from './core/telegram-config.js'
 import { TelegramClient } from './connectors/telegram/client.js'
@@ -317,6 +318,7 @@ export async function createPipeline(deps: PipelineDeps = {}): Promise<SignalPip
     const executor = new OrderExecutor({
       broker,
       loadExecutionConfig,
+      loadRiskConfig,
     })
     brokerDispatcher = new BrokerDispatcher({
       store: operationStore,
