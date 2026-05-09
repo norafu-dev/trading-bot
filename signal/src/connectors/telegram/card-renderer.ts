@@ -17,12 +17,28 @@
  *   - colon-separated for trivial parsing without JSON overhead.
  */
 
-import type { KolConfig, Operation } from '../../../../shared/types.js'
+import type { KolConfig, Operation, OperationSpec } from '../../../../shared/types.js'
 import type { TgInlineKeyboardMarkup } from './client.js'
 
 export interface ApprovalCard {
   text: string
   replyMarkup: TgInlineKeyboardMarkup
+}
+
+/**
+ * Optional fresh-quote snapshot taken at the moment the approval card
+ * is rendered. Lets the card show "signal-time vs approval-time" drift
+ * — particularly useful for market orders where the signal might be
+ * 2-3 minutes old and the price has moved meaningfully.
+ *
+ * `null` (price service unavailable, symbol unresolvable) is acceptable —
+ * the renderer falls back to op.priceCheck (signal-time snapshot) so
+ * distances are still shown, just less fresh.
+ */
+export interface LiveQuoteSnapshot {
+  price: string
+  source: string
+  fetchedAt: string
 }
 
 export interface ParsedCallbackData {
@@ -48,10 +64,19 @@ export function parseCallback(data: string): ParsedCallbackData | null {
 /**
  * Build the pending-approval card. Called once per operation when the
  * engine emits `operation.created` with status === 'pending'.
+ *
+ * `liveNow` is an optional fresh quote pulled by the notifier right
+ * before sending the card; when present it drives the price-aid line
+ * AND a "signal-time vs now" drift metric. When absent the card falls
+ * back to op.priceCheck (snapshot from signal parsing time).
  */
-export function renderApprovalCard(op: Operation, kol: KolConfig | undefined): ApprovalCard {
+export function renderApprovalCard(
+  op: Operation,
+  kol: KolConfig | undefined,
+  liveNow?: LiveQuoteSnapshot,
+): ApprovalCard {
   return {
-    text: renderPendingText(op, kol),
+    text: renderPendingText(op, kol, liveNow),
     replyMarkup: {
       inline_keyboard: [
         [
@@ -86,8 +111,12 @@ export function renderResolvedText(
 
 // ── Internals ──────────────────────────────────────────────────────────────
 
-function renderPendingText(op: Operation, kol: KolConfig | undefined): string {
-  return [renderHeader(op, kol), renderBody(op), renderPendingFooter(op)]
+function renderPendingText(
+  op: Operation,
+  kol: KolConfig | undefined,
+  liveNow?: LiveQuoteSnapshot,
+): string {
+  return [renderHeader(op, kol), renderBody(op, liveNow), renderPendingFooter(op)]
     .filter(Boolean)
     .join('\n\n')
 }
@@ -99,7 +128,7 @@ function renderHeader(op: Operation, kol: KolConfig | undefined): string {
   return `${statusEmoji} *${escape(statusLabel)}* — ${escape(kolLabel)}`
 }
 
-function renderBody(op: Operation): string {
+function renderBody(op: Operation, liveNow?: LiveQuoteSnapshot): string {
   const spec = op.spec
   if (spec.action !== 'placeOrder') {
     return `_${escape(spec.action)}_`
@@ -147,7 +176,107 @@ function renderBody(op: Operation): string {
     )
   }
 
+  // Live-price decision aid — distance from "now" to entry / SL / each
+  // TP, plus signal-time-vs-now drift. The single most useful piece of
+  // info before approving: "has the price moved since the signal? is
+  // the R/R still attractive?". Prefers fresh `liveNow` (notifier-time
+  // quote); falls back to op.priceCheck (signal-time snapshot).
+  const priceAid = renderPriceAid(spec, op.priceCheck, liveNow)
+  if (priceAid) lines.push(priceAid)
+
   return lines.join('\n')
+}
+
+/**
+ * Build the live-price decision panel. Two layers:
+ *   - HEADER: which price we're using as "now", plus "signal-time vs now"
+ *     drift if both snapshots are available. Drift is what tells the
+ *     operator whether the signal has gone stale while waiting.
+ *   - DISTANCES: from "now" to entry (limit only) / each TP / SL.
+ *     Sign convention: TP / entry framed in the trade's favourable
+ *     direction so positive = good. SL framed raw (negative = stop is
+ *     on the losing side, e.g. "-13%" = you're 13% from getting stopped).
+ *
+ * Returns null when neither liveNow nor op.priceCheck has a usable price.
+ */
+function renderPriceAid(
+  spec: Extract<OperationSpec, { action: 'placeOrder' }>,
+  signalSnap: Operation['priceCheck'],
+  liveNow: LiveQuoteSnapshot | undefined,
+): string | null {
+  // Pick the freshest price for distance math; default to signalSnap.
+  const refPriceStr = liveNow?.price ?? signalSnap?.currentPrice
+  const refSource = liveNow?.source ?? signalSnap?.source
+  if (!refPriceStr) return null
+  const live = Number(refPriceStr)
+  if (!Number.isFinite(live) || live <= 0) return null
+
+  const headerBits: string[] = [
+    liveNow
+      ? `*实时* \`${escape(refPriceStr)}\` (${escape(refSource ?? 'live')})`
+      : `*信号时* \`${escape(refPriceStr)}\` (${escape(refSource ?? 'snap')})`,
+  ]
+
+  // Drift from signal time to now — tells you if the signal aged poorly.
+  if (liveNow && signalSnap) {
+    const t0 = Number(signalSnap.currentPrice)
+    if (Number.isFinite(t0) && t0 > 0) {
+      const drift = ((live - t0) / t0) * 100
+      // Frame drift in the trade's favourable direction so a
+      // "+1%" reads as "price has moved 1% in your favour while the
+      // signal sat in the queue", and "-1.5%" as "moved against you".
+      const dirSign = spec.side === 'long' ? 1 : -1
+      const framedDrift = drift * dirSign
+      headerBits.push(
+        `信号时 \`${escape(signalSnap.currentPrice)}\` → 已${framedDrift >= 0 ? '顺' : '逆'} ${formatSignedPct(framedDrift)}`,
+      )
+    }
+  }
+
+  const dirSign = spec.side === 'long' ? 1 : -1
+  const distances: string[] = []
+  // Entry — meaningful only for limit orders. KOL's specified entry
+  // price vs current market.
+  if (spec.orderType === 'limit' && spec.price) {
+    const entry = Number(spec.price)
+    if (Number.isFinite(entry) && entry > 0) {
+      // For a long limit waiting for pullback (entry < live), pct < 0
+      // means "price still needs to drop X% before we fill" — the
+      // canonical patient setup. Frame raw signed so the reader sees
+      // direction at a glance.
+      const pct = ((entry - live) / live) * 100
+      distances.push(`距入场 ${formatSignedPct(pct)}`)
+    }
+  }
+  // TPs — favourable side (positive = price needs to move that much
+  // in your favour to hit the target).
+  for (const tp of spec.takeProfits ?? []) {
+    const v = Number(tp.price)
+    if (!Number.isFinite(v) || v <= 0) continue
+    const pct = ((v - live) / live) * 100 * dirSign
+    distances.push(`TP${tp.level} ${formatSignedPct(pct)}`)
+  }
+  // SL — raw signed. Negative percent = you're that close to stop-out
+  // on a market entry. "−13%" should visually scream the worst case.
+  if (spec.stopLoss?.price) {
+    const v = Number(spec.stopLoss.price)
+    if (Number.isFinite(v) && v > 0) {
+      const pct = ((v - live) / live) * 100 * dirSign
+      distances.push(`SL ${formatSignedPct(pct)}`)
+    }
+  }
+
+  const lines: string[] = [headerBits.join('\n')]
+  if (distances.length > 0) {
+    lines.push(`_${escape(distances.join(' · '))}_`)
+  }
+  return lines.join('\n')
+}
+
+function formatSignedPct(p: number): string {
+  if (!Number.isFinite(p)) return '?'
+  const sign = p >= 0 ? '+' : ''
+  return `${sign}${p.toFixed(1)}%`
 }
 
 function renderPendingFooter(op: Operation): string {

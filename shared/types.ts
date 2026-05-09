@@ -528,6 +528,23 @@ export interface Operation {
   spec: OperationSpec
 
   /**
+   * Live market reference at sizing time, copied from `signal.priceCheck`.
+   * The Telegram approval card and dashboard operation card render
+   * "current price vs entry / SL / TP" deltas off this field so the
+   * operator can eyeball R/R before approving — the signal had this
+   * data but it wasn't being propagated to the operation layer.
+   *
+   * Captured at sizing time, so it's slightly stale by the time the
+   * card is rendered. The card renderer formats accordingly ("实时
+   * <price> @ <fetchedAt>") rather than implying the price is live.
+   */
+  priceCheck?: {
+    currentPrice: string
+    source: string
+    fetchedAt: string
+  }
+
+  /**
    * Account snapshot used at sizing time, captured for audit. Lets the
    * dashboard show "this operation was sized assuming equity = X" even
    * if the account moves before approval.

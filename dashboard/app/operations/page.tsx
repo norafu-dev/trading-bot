@@ -341,6 +341,11 @@ function OperationCard({ op, kol, onChanged }: { op: Operation; kol?: KolConfig;
             </p>
           )}
 
+          {/* Live-price decision aid: distance-to-entry / TP / SL */}
+          {spec.action === "placeOrder" && op.priceCheck && (
+            <PriceAidLine spec={spec} priceCheck={op.priceCheck} />
+          )}
+
           {/* Decision callout — guard / timeout / human / broker */}
           <DecisionCallout op={op} />
 
@@ -537,6 +542,82 @@ function DashStat({
       <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</div>
       <div className="mt-1 text-2xl font-bold">{value}</div>
       {sub && <div className="mt-0.5 text-[11px] text-muted-foreground">{sub}</div>}
+    </div>
+  );
+}
+
+/**
+ * Live-price decision aid. Shows current market and signed distances
+ * to entry / TP / SL — the operator's first question before approving
+ * a market order is "is the R/R still attractive at NOW's price?".
+ *
+ * Sign convention: distances are framed in the trade's favourable
+ * direction (positive % = price needs to move that way to hit the
+ * level), except for SL which always shows the raw signed distance so
+ * a deep-red "-13%" jumps out as "you're 13% from getting stopped".
+ */
+function PriceAidLine({
+  spec,
+  priceCheck,
+}: {
+  spec: Extract<Operation["spec"], { action: "placeOrder" }>;
+  priceCheck: NonNullable<Operation["priceCheck"]>;
+}) {
+  const live = Number(priceCheck.currentPrice);
+  if (!Number.isFinite(live) || live <= 0) return null;
+  const dirSign = spec.side === "long" ? 1 : -1;
+
+  const distances: Array<{ label: string; pct: number; tone?: "good" | "bad" }> = [];
+  if (spec.orderType === "limit" && spec.price) {
+    const e = Number(spec.price);
+    if (Number.isFinite(e) && e > 0) {
+      distances.push({
+        label: "距入场",
+        pct: ((e - live) / live) * 100 * -dirSign,
+      });
+    }
+  }
+  for (const tp of spec.takeProfits ?? []) {
+    const v = Number(tp.price);
+    if (!Number.isFinite(v) || v <= 0) continue;
+    distances.push({
+      label: `TP${tp.level}`,
+      pct: ((v - live) / live) * 100 * dirSign,
+      tone: "good",
+    });
+  }
+  if (spec.stopLoss?.price) {
+    const v = Number(spec.stopLoss.price);
+    if (Number.isFinite(v) && v > 0) {
+      distances.push({
+        label: "SL",
+        pct: ((v - live) / live) * 100 * dirSign,
+        tone: "bad",
+      });
+    }
+  }
+
+  return (
+    <div className="mt-2 rounded-md border border-blue-500/20 bg-blue-500/5 px-2 py-1.5 text-xs">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
+        <span className="font-medium text-blue-400">📊 实时 {priceCheck.currentPrice}</span>
+        <span className="text-[10px] text-muted-foreground">{priceCheck.source}</span>
+      </div>
+      {distances.length > 0 && (
+        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 font-mono text-[11px]">
+          {distances.map((d, i) => (
+            <span key={i} className={
+              d.tone === "good" ? "text-green-400"
+              : d.tone === "bad" ? "text-red-400"
+              : "text-foreground"
+            }>
+              {d.label}{" "}
+              {d.pct >= 0 ? "+" : ""}
+              {d.pct.toFixed(1)}%
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

@@ -51,6 +51,13 @@ export interface ApprovalNotifierDeps {
   events: EventLog
   store: IOperationStore
   kolRegistry: KolRegistry
+  /**
+   * Optional. When wired, the notifier pulls a fresh market quote at
+   * the moment it sends the approval card so the operator can see
+   * "signal-time vs now" drift. Failures degrade silently (the card
+   * still renders, just without the live drift line).
+   */
+  priceService?: import('../market/types.js').IPriceService
 }
 
 /**
@@ -125,7 +132,23 @@ export class TelegramNotifier {
     if (op.status !== 'pending') return  // already decided since the event
 
     const kol = this.deps.kolRegistry.get(op.kolId) ?? undefined
-    const card = renderApprovalCard(op, kol)
+
+    // Pull a fresh quote so the card can show "signal-time vs now" drift.
+    // Best-effort: if the price service isn't configured or the symbol
+    // doesn't resolve we just send the card without the live line.
+    let liveNow: import('./card-renderer.js').LiveQuoteSnapshot | undefined
+    if (this.deps.priceService && op.spec.action === 'placeOrder') {
+      try {
+        const q = await this.deps.priceService.getPrice(op.spec.symbol, op.spec.contractType)
+        if (q) {
+          liveNow = { price: q.price, source: q.source, fetchedAt: q.fetchedAt }
+        }
+      } catch (err) {
+        logger.debug({ err, operationId: op.id }, 'TelegramNotifier: live-quote fetch failed; sending card without drift')
+      }
+    }
+
+    const card = renderApprovalCard(op, kol, liveNow)
     try {
       const message = await this.deps.client.sendMessage({
         chatId: this.deps.chatId,

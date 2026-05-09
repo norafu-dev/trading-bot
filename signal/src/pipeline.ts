@@ -272,6 +272,7 @@ export async function createPipeline(deps: PipelineDeps = {}): Promise<SignalPip
       events: eventLog,
       store: operationStore,
       kolRegistry,
+      ...(deps.priceService && { priceService: deps.priceService }),
     })
     telegramListener = new TelegramListener({
       client: tgClient,

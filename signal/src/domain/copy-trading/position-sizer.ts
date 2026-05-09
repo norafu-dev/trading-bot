@@ -100,6 +100,17 @@ export class PositionSizer {
         equity: equity.toFixed(2),
         effectiveRiskPercent: cappedPercent.toFixed(4),
       },
+      // Forward the Layer-1 price-check snapshot to the operation so the
+      // approval card can render "live X · 距 TP1 +A% · 距 SL -B%" without
+      // re-querying the price service. Stale by the time the card shows
+      // (typically 5-30s old) but plenty good for human eyeballing R/R.
+      ...(signal.priceCheck && {
+        priceCheck: {
+          currentPrice: signal.priceCheck.currentPrice,
+          source: signal.priceCheck.source,
+          fetchedAt: signal.priceCheck.fetchedAt,
+        },
+      }),
     }
   }
 }
