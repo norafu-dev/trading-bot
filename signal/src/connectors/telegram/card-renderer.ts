@@ -128,6 +128,24 @@ function renderHeader(op: Operation, kol: KolConfig | undefined): string {
   return `${statusEmoji} *${escape(statusLabel)}* — ${escape(kolLabel)}`
 }
 
+/**
+ * Pending-card body. Layout aim: each price level on its own line so the
+ * operator can scan top-to-bottom without parsing dense tag soup. The
+ * three groups, separated by blank lines:
+ *
+ *   1. Header — symbol + side + perp/spot + leverage badges
+ *   2. Price ladder — entry first, then SL, then TPs in order. Each row
+ *      pairs the absolute price with its distance from current market
+ *      so "is this still attractive?" reads as a single eyeball motion.
+ *   3. Footer line — sizing context (small, _italic_).
+ *
+ * Distance computation always uses the freshest available price
+ * (liveNow → falls back to op.priceCheck). The signal-time-vs-now
+ * "drift" panel was removed because in practice the two timestamps
+ * are within seconds of each other (sizer pulls priceCheck → engine
+ * emits → notifier renders, all in the same second), so the drift
+ * always read 0% and added zero information.
+ */
 function renderBody(op: Operation, liveNow?: LiveQuoteSnapshot): string {
   const spec = op.spec
   if (spec.action !== 'placeOrder') {
@@ -136,141 +154,137 @@ function renderBody(op: Operation, liveNow?: LiveQuoteSnapshot): string {
   const sideEmoji = spec.side === 'long' ? '📈' : '📉'
   const sideLabel = spec.side === 'long' ? '做多' : '做空'
   const contractLabel = spec.contractType === 'perpetual' ? '永续' : '现货'
-  const lines: string[] = []
+  const orderTypeLabel = spec.orderType === 'limit' ? '限价' : '市价'
 
-  // Symbol + side + leverage
+  const sections: string[] = []
+
+  // ── Header: symbol + key badges ─────────────────────────────────
   const headerBits: string[] = [
     `${sideEmoji} *${escape(spec.symbol)}*`,
     `\`${sideLabel}\``,
     `\`${contractLabel}\``,
+    `\`${orderTypeLabel}\``,
   ]
   if (spec.leverage !== undefined) headerBits.push(`\`${spec.leverage}×\``)
-  lines.push(headerBits.join(' '))
+  sections.push(headerBits.join(' '))
 
-  // Order type + price
-  if (spec.orderType === 'limit' && spec.price) {
-    lines.push(`入场：\`${escape(spec.price)}\` (限价)`)
-  } else {
-    lines.push('入场：市价')
-  }
+  // ── Price ladder: entry / SL / TPs, each annotated with distance ─
+  // Use the freshest price we have for percentage math.
+  const refPrice = pickRefPrice(op.priceCheck, liveNow)
+  const ladder = renderPriceLadder(spec, refPrice)
+  sections.push(ladder)
 
-  // Size
-  const unit = spec.size.unit === 'absolute' ? 'USDT' : spec.size.unit
-  lines.push(`规模：\`${escape(spec.size.value)} ${escape(unit)}\``)
-
-  // SL / TP
-  if (spec.stopLoss?.price) {
-    lines.push(`止损：\`${escape(spec.stopLoss.price)}\``)
-  }
-  if (spec.takeProfits && spec.takeProfits.length > 0) {
-    const tps = spec.takeProfits
-      .map((tp) => `止盈${tp.level}：\`${escape(tp.price)}\``)
-      .join('  ')
-    lines.push(tps)
-  }
-
-  // Sizing context — small, so the human knows what equity assumption was used
+  // ── Footer: sizing context + (rare) signal-time drift ────────────
+  const footerLines: string[] = []
   if (op.sizingContext) {
-    lines.push(
-      `_按权益 ${escape(op.sizingContext.equity)} USDT × ${escape(op.sizingContext.effectiveRiskPercent)}% 测算_`,
+    const unit = spec.size.unit === 'absolute' ? 'USDT' : spec.size.unit
+    footerLines.push(
+      `_规模 ${escape(spec.size.value)} ${escape(unit)}  ·  权益 ${escape(op.sizingContext.equity)} USDT × ${escape(op.sizingContext.effectiveRiskPercent)}%_`,
     )
   }
+  // Signal drift only mentioned when meaningfully large (> 0.3%) — sub-
+  // 0.3% drifts are noise from the signal-time snapshot being taken
+  // seconds before the approval-time fetch.
+  const driftLine = renderDriftIfSignificant(spec, op.priceCheck, liveNow)
+  if (driftLine) footerLines.push(driftLine)
+  if (footerLines.length > 0) sections.push(footerLines.join('\n'))
 
-  // Live-price decision aid — distance from "now" to entry / SL / each
-  // TP, plus signal-time-vs-now drift. The single most useful piece of
-  // info before approving: "has the price moved since the signal? is
-  // the R/R still attractive?". Prefers fresh `liveNow` (notifier-time
-  // quote); falls back to op.priceCheck (signal-time snapshot).
-  const priceAid = renderPriceAid(spec, op.priceCheck, liveNow)
-  if (priceAid) lines.push(priceAid)
+  return sections.join('\n\n')
+}
+
+/**
+ * Compose the price-ladder lines (entry / SL / TPs). When refPrice is
+ * available each line is annotated with a signed % distance:
+ *   - entry: raw signed (negative = price still needs to pull back to
+ *            fill the limit; ≈0 = already at entry)
+ *   - SL: framed in the trade's losing direction so the magnitude is
+ *         "how much room until stop-out". 14% = comfortable buffer.
+ *         A small negative (-1%) screams "you're about to get stopped".
+ *   - TPs: framed in the favourable direction so positive = "this much
+ *          upside left to capture". TP1 +0.4% means TP1 is right above
+ *          current price — barely any reward left.
+ */
+function renderPriceLadder(
+  spec: Extract<OperationSpec, { action: 'placeOrder' }>,
+  refPrice: { price: number; source: string } | null,
+): string {
+  const lines: string[] = []
+  const dirSign = spec.side === 'long' ? 1 : -1
+
+  // Live price banner — gives the % column a referent.
+  if (refPrice) {
+    lines.push(`实时 \`${refPrice.price}\`  _(${escape(refPrice.source)})_`)
+  }
+
+  // Entry — for a limit order, show the KOL's specified price; for market,
+  // align entry == live so distance is conceptually 0.
+  if (spec.orderType === 'limit' && spec.price) {
+    const entryNum = Number(spec.price)
+    const distLabel = refPrice && Number.isFinite(entryNum) && entryNum > 0
+      ? `  \`${formatSignedPct(((entryNum - refPrice.price) / refPrice.price) * 100)}\``
+      : ''
+    lines.push(`入场 \`${escape(spec.price)}\`${distLabel}`)
+  } else {
+    lines.push('入场 \`市价\`')
+  }
+
+  // SL
+  if (spec.stopLoss?.price) {
+    const slNum = Number(spec.stopLoss.price)
+    const distLabel = refPrice && Number.isFinite(slNum) && slNum > 0
+      ? `  \`${formatSignedPct(((slNum - refPrice.price) / refPrice.price) * 100 * dirSign)}\``
+      : ''
+    lines.push(`🛑 止损 \`${escape(spec.stopLoss.price)}\`${distLabel}`)
+  }
+
+  // TPs — one per line for readability
+  for (const tp of spec.takeProfits ?? []) {
+    const tpNum = Number(tp.price)
+    const distLabel = refPrice && Number.isFinite(tpNum) && tpNum > 0
+      ? `  \`${formatSignedPct(((tpNum - refPrice.price) / refPrice.price) * 100 * dirSign)}\``
+      : ''
+    lines.push(`🎯 TP${tp.level} \`${escape(tp.price)}\`${distLabel}`)
+  }
 
   return lines.join('\n')
 }
 
 /**
- * Build the live-price decision panel. Two layers:
- *   - HEADER: which price we're using as "now", plus "signal-time vs now"
- *     drift if both snapshots are available. Drift is what tells the
- *     operator whether the signal has gone stale while waiting.
- *   - DISTANCES: from "now" to entry (limit only) / each TP / SL.
- *     Sign convention: TP / entry framed in the trade's favourable
- *     direction so positive = good. SL framed raw (negative = stop is
- *     on the losing side, e.g. "-13%" = you're 13% from getting stopped).
- *
- * Returns null when neither liveNow nor op.priceCheck has a usable price.
+ * Pick the freshest available reference price. Returns null when neither
+ * snapshot is usable — caller renders a stripped-down ladder without
+ * percentage annotations.
  */
-function renderPriceAid(
+function pickRefPrice(
+  signalSnap: Operation['priceCheck'],
+  liveNow: LiveQuoteSnapshot | undefined,
+): { price: number; source: string } | null {
+  const raw = liveNow?.price ?? signalSnap?.currentPrice
+  const source = liveNow?.source ?? signalSnap?.source ?? 'live'
+  if (!raw) return null
+  const n = Number(raw)
+  if (!Number.isFinite(n) || n <= 0) return null
+  return { price: n, source }
+}
+
+/**
+ * Show "信号时 X → 已顺/逆 Y%" only when the drift is large enough to
+ * affect the decision. Below 0.3% we treat it as noise from sizing
+ * latency and suppress.
+ */
+function renderDriftIfSignificant(
   spec: Extract<OperationSpec, { action: 'placeOrder' }>,
   signalSnap: Operation['priceCheck'],
   liveNow: LiveQuoteSnapshot | undefined,
 ): string | null {
-  // Pick the freshest price for distance math; default to signalSnap.
-  const refPriceStr = liveNow?.price ?? signalSnap?.currentPrice
-  const refSource = liveNow?.source ?? signalSnap?.source
-  if (!refPriceStr) return null
-  const live = Number(refPriceStr)
-  if (!Number.isFinite(live) || live <= 0) return null
-
-  const headerBits: string[] = [
-    liveNow
-      ? `*实时* \`${escape(refPriceStr)}\` (${escape(refSource ?? 'live')})`
-      : `*信号时* \`${escape(refPriceStr)}\` (${escape(refSource ?? 'snap')})`,
-  ]
-
-  // Drift from signal time to now — tells you if the signal aged poorly.
-  if (liveNow && signalSnap) {
-    const t0 = Number(signalSnap.currentPrice)
-    if (Number.isFinite(t0) && t0 > 0) {
-      const drift = ((live - t0) / t0) * 100
-      // Frame drift in the trade's favourable direction so a
-      // "+1%" reads as "price has moved 1% in your favour while the
-      // signal sat in the queue", and "-1.5%" as "moved against you".
-      const dirSign = spec.side === 'long' ? 1 : -1
-      const framedDrift = drift * dirSign
-      headerBits.push(
-        `信号时 \`${escape(signalSnap.currentPrice)}\` → 已${framedDrift >= 0 ? '顺' : '逆'} ${formatSignedPct(framedDrift)}`,
-      )
-    }
-  }
-
+  if (!liveNow || !signalSnap) return null
+  const live = Number(liveNow.price)
+  const t0 = Number(signalSnap.currentPrice)
+  if (!Number.isFinite(live) || !Number.isFinite(t0) || live <= 0 || t0 <= 0) return null
+  const drift = ((live - t0) / t0) * 100
+  if (Math.abs(drift) < 0.3) return null
   const dirSign = spec.side === 'long' ? 1 : -1
-  const distances: string[] = []
-  // Entry — meaningful only for limit orders. KOL's specified entry
-  // price vs current market.
-  if (spec.orderType === 'limit' && spec.price) {
-    const entry = Number(spec.price)
-    if (Number.isFinite(entry) && entry > 0) {
-      // For a long limit waiting for pullback (entry < live), pct < 0
-      // means "price still needs to drop X% before we fill" — the
-      // canonical patient setup. Frame raw signed so the reader sees
-      // direction at a glance.
-      const pct = ((entry - live) / live) * 100
-      distances.push(`距入场 ${formatSignedPct(pct)}`)
-    }
-  }
-  // TPs — favourable side (positive = price needs to move that much
-  // in your favour to hit the target).
-  for (const tp of spec.takeProfits ?? []) {
-    const v = Number(tp.price)
-    if (!Number.isFinite(v) || v <= 0) continue
-    const pct = ((v - live) / live) * 100 * dirSign
-    distances.push(`TP${tp.level} ${formatSignedPct(pct)}`)
-  }
-  // SL — raw signed. Negative percent = you're that close to stop-out
-  // on a market entry. "−13%" should visually scream the worst case.
-  if (spec.stopLoss?.price) {
-    const v = Number(spec.stopLoss.price)
-    if (Number.isFinite(v) && v > 0) {
-      const pct = ((v - live) / live) * 100 * dirSign
-      distances.push(`SL ${formatSignedPct(pct)}`)
-    }
-  }
-
-  const lines: string[] = [headerBits.join('\n')]
-  if (distances.length > 0) {
-    lines.push(`_${escape(distances.join(' · '))}_`)
-  }
-  return lines.join('\n')
+  const framed = drift * dirSign
+  return `_信号时 ${escape(signalSnap.currentPrice)} → 已${framed >= 0 ? '顺' : '逆'} ${formatSignedPct(framed)}_`
 }
 
 function formatSignedPct(p: number): string {
