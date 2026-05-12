@@ -1,25 +1,24 @@
 import type { OperationGuard, GuardContext } from './types.js'
 
 /**
- * Reject when the price-check layer flagged the signal as stale —
- * the live market has moved past the entry far enough that the trade
- * thesis is suspect. Trading after the move usually means worse R/R
- * and a higher chance of being stopped out.
+ * Reject MARKET orders flagged as stale — the live market has moved
+ * past the KOL's stated entry far enough that filling immediately
+ * means a meaningfully worse fill than the KOL intended.
  *
- * Threshold differs by order type and is resolved up in
- * `computePriceCheck` (1% for market, 5% for limit), so by the time
- * the guard sees `priceCheck.stale === true` the distance has already
- * been judged egregious for that order type. The guard's only job is
- * to convert that flag into a rejection.
+ * Limit orders are exempt. A limit sits unfilled until the market
+ * comes back to entry; even an egregiously-far-away entry doesn't
+ * cost the operator anything (no risk taken, just an order ticket
+ * occupying a slot). Whether the KOL's setup will actually trigger
+ * is the operator's judgement call — for example:
+ *   - KOL喊 "short BTC at 80k" with live 75k → reasonable bounce
+ *     setup, operator may approve and wait
+ *   - KOL喊 "long ETH at 3500" with live 2800 → maybe a swing
+ *     setup the KOL believes in; not our place to refuse
  *
- * Earlier versions exempted limit orders entirely — the rationale
- * was "a limit just sits unfilled, no risk taken." But that ignored
- * the case where the KOL's entry range is already so far behind the
- * market that fills are unlikely to happen within the operator's
- * timeframe, AND if they do happen the multiple TPs will already be
- * crossed. The order-type-aware threshold in price-check now lets
- * normal "limit waiting for 1-2% pullback" setups through while
- * catching the egregious "8% past entry" cases.
+ * The dashboard still surfaces priceCheck.stale (with its different
+ * threshold for limit vs market) as a warning callout, so the
+ * operator sees the distance flagged at decision time. We just
+ * don't auto-reject.
  *
  * If `signal.priceCheck` is absent (price service couldn't resolve
  * the symbol, or the signal pre-dates Layer 1), the guard passes —
@@ -31,6 +30,17 @@ export class StaleSignalGuard implements OperationGuard {
   check(ctx: GuardContext): string | null {
     const pc = ctx.signal.priceCheck
     if (!pc?.stale) return null
+
+    // Limit orders intentionally wait for price to come back; an
+    // unfilled limit costs nothing. Operator decides whether to keep
+    // it open or cancel.
+    if (
+      ctx.operation.spec.action === 'placeOrder' &&
+      ctx.operation.spec.orderType === 'limit'
+    ) {
+      return null
+    }
+
     const detail = pc.entryDistancePercent !== undefined
       ? ` (entry ${pc.entryDistancePercent}% from live ${pc.currentPrice})`
       : ''

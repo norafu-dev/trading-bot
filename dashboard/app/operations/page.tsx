@@ -567,7 +567,21 @@ function PriceAidLine({
   if (!Number.isFinite(live) || live <= 0) return null;
   const dirSign = spec.side === "long" ? 1 : -1;
 
+  // SL/TP distance basis: entry price for unfilled limit orders, live
+  // otherwise. For a limit order waiting on a pullback, the operator
+  // wants to know "if this fills, how much do I gain/lose to each
+  // level" — not "how far from current price". The latter gave
+  // confusing negatives like "TP1 -2.4%" for a short that hadn't even
+  // reached its entry yet.
+  let slTpBasis: number | null = null;
+  if (spec.orderType === "limit" && spec.price) {
+    const e = Number(spec.price);
+    if (Number.isFinite(e) && e > 0) slTpBasis = e;
+  }
+  if (slTpBasis === null) slTpBasis = live;
+
   const distances: Array<{ label: string; pct: number; tone?: "good" | "bad" }> = [];
+  // Entry — always vs live (showing "how far before this fills")
   if (spec.orderType === "limit" && spec.price) {
     const e = Number(spec.price);
     if (Number.isFinite(e) && e > 0) {
@@ -582,7 +596,7 @@ function PriceAidLine({
     if (!Number.isFinite(v) || v <= 0) continue;
     distances.push({
       label: `TP${tp.level}`,
-      pct: ((v - live) / live) * 100 * dirSign,
+      pct: ((v - slTpBasis) / slTpBasis) * 100 * dirSign,
       tone: "good",
     });
   }
@@ -591,11 +605,13 @@ function PriceAidLine({
     if (Number.isFinite(v) && v > 0) {
       distances.push({
         label: "SL",
-        pct: ((v - live) / live) * 100 * dirSign,
+        pct: ((v - slTpBasis) / slTpBasis) * 100 * dirSign,
         tone: "bad",
       });
     }
   }
+
+  const usingEntryBasis = spec.orderType === "limit" && spec.price !== undefined;
 
   return (
     <div className="mt-2 rounded-md border border-blue-500/20 bg-blue-500/5 px-2 py-1.5 text-xs">
@@ -616,6 +632,11 @@ function PriceAidLine({
               {d.pct.toFixed(1)}%
             </span>
           ))}
+        </div>
+      )}
+      {usingEntryBasis && (
+        <div className="mt-0.5 text-[10px] text-muted-foreground italic">
+          ↑ SL/TP 距离基于挂单价 {spec.price}（成交后变动）
         </div>
       )}
     </div>

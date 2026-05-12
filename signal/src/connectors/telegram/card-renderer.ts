@@ -193,16 +193,28 @@ function renderBody(op: Operation, liveNow?: LiveQuoteSnapshot): string {
 }
 
 /**
- * Compose the price-ladder lines (entry / SL / TPs). When refPrice is
- * available each line is annotated with a signed % distance:
- *   - entry: raw signed (negative = price still needs to pull back to
- *            fill the limit; ≈0 = already at entry)
- *   - SL: framed in the trade's losing direction so the magnitude is
- *         "how much room until stop-out". 14% = comfortable buffer.
- *         A small negative (-1%) screams "you're about to get stopped".
- *   - TPs: framed in the favourable direction so positive = "this much
- *          upside left to capture". TP1 +0.4% means TP1 is right above
- *          current price — barely any reward left.
+ * Compose the price-ladder lines (entry / SL / TPs). Distance basis
+ * depends on order type:
+ *
+ *   limit + spec.price known → SL/TP %s are computed FROM THE ENTRY
+ *     PRICE, not from live. This is what matters for an unfilled limit:
+ *     "once this fills, how much do I gain/lose from entry to SL/TP?"
+ *     Computing distance from live (the previous behaviour) gave
+ *     nonsense like "TP1 -2.4%" for a short that hadn't even reached
+ *     entry yet — TP1 hadn't been "missed", it was waiting on the
+ *     entry to fill first.
+ *
+ *   market or limit without entry → fall back to live as the basis.
+ *     For market orders this is the right answer (fill ≈ live).
+ *
+ * The entry row itself always shows distance from live, because that's
+ * the operationally interesting "how far does price need to travel
+ * before my entry triggers?" datum.
+ *
+ * Sign convention unchanged:
+ *   - entry: raw signed (negative = need pullback to fill long limit)
+ *   - SL: framed in the trade's losing direction (negative = room to stop)
+ *   - TP: framed in the favourable direction (positive = room to profit)
  */
 function renderPriceLadder(
   spec: Extract<OperationSpec, { action: 'placeOrder' }>,
@@ -216,8 +228,19 @@ function renderPriceLadder(
     lines.push(`实时 \`${refPrice.price}\`  _(${escape(refPrice.source)})_`)
   }
 
-  // Entry — for a limit order, show the KOL's specified price; for market,
-  // align entry == live so distance is conceptually 0.
+  // Resolve the "distance basis" for SL/TP rows. Prefer entry when this
+  // is a limit order with a known entry price (so distances reflect
+  // post-fill P&L). Otherwise fall back to live (market orders fill
+  // around live anyway).
+  let slTpBasis: number | null = null
+  if (spec.orderType === 'limit' && spec.price) {
+    const e = Number(spec.price)
+    if (Number.isFinite(e) && e > 0) slTpBasis = e
+  }
+  if (slTpBasis === null && refPrice) slTpBasis = refPrice.price
+
+  // Entry — always show distance from LIVE so the operator sees how far
+  // price has to travel before the limit triggers.
   if (spec.orderType === 'limit' && spec.price) {
     const entryNum = Number(spec.price)
     const distLabel = refPrice && Number.isFinite(entryNum) && entryNum > 0
@@ -228,22 +251,28 @@ function renderPriceLadder(
     lines.push('入场 \`市价\`')
   }
 
-  // SL
+  // SL — distance from slTpBasis (entry for limit, live for market).
   if (spec.stopLoss?.price) {
     const slNum = Number(spec.stopLoss.price)
-    const distLabel = refPrice && Number.isFinite(slNum) && slNum > 0
-      ? `  \`${formatSignedPct(((slNum - refPrice.price) / refPrice.price) * 100 * dirSign)}\``
+    const distLabel = slTpBasis !== null && Number.isFinite(slNum) && slNum > 0
+      ? `  \`${formatSignedPct(((slNum - slTpBasis) / slTpBasis) * 100 * dirSign)}\``
       : ''
     lines.push(`🛑 止损 \`${escape(spec.stopLoss.price)}\`${distLabel}`)
   }
 
-  // TPs — one per line for readability
+  // TPs — distance from slTpBasis. One per line for readability.
   for (const tp of spec.takeProfits ?? []) {
     const tpNum = Number(tp.price)
-    const distLabel = refPrice && Number.isFinite(tpNum) && tpNum > 0
-      ? `  \`${formatSignedPct(((tpNum - refPrice.price) / refPrice.price) * 100 * dirSign)}\``
+    const distLabel = slTpBasis !== null && Number.isFinite(tpNum) && tpNum > 0
+      ? `  \`${formatSignedPct(((tpNum - slTpBasis) / slTpBasis) * 100 * dirSign)}\``
       : ''
     lines.push(`🎯 TP${tp.level} \`${escape(tp.price)}\`${distLabel}`)
+  }
+
+  // Hint operator about the basis when we used entry (so they're not
+  // confused by SL/TP distances disagreeing with live's distance).
+  if (spec.orderType === 'limit' && spec.price) {
+    lines.push(`_↑ SL/TP 距离基于挂单价 ${escape(spec.price)}（成交后变动）_`)
   }
 
   return lines.join('\n')
