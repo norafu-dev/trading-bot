@@ -168,17 +168,26 @@ describe('OrderExecutor', () => {
       expect(calls.placeOrder[0]?.side).toBe('sell')
     })
 
-    it('attaches only stopLossPrice (not takeProfitPrice) to the main order', async () => {
-      // Why: takeProfitPrice has no size argument, so brokers default to
-      // closing 100% of the position when it triggers — defeating multi-TP
-      // ladders. We now place TPs as standalone reduce-only limits.
+    it('attaches SL via structured `stopLoss` (not flat `stopLossPrice`) to the main order', async () => {
+      // Why structured form: ccxt-bitget treats the flat `stopLossPrice` param
+      // as a standalone trigger order and reverse-infers holdSide from `side`,
+      // causing rejections like "Short position stop loss price please > mark
+      // price" on a long. The structured `stopLoss: { triggerPrice }` maps to
+      // Bitget's `presetStopLossPrice` (position-attached, direction inferred
+      // from the main order's side) — no misclassification.
+      //
+      // takeProfitPrice is also NOT attached: it has no size argument, so
+      // brokers default to closing 100% of the position. We place TPs as
+      // standalone reduce-only limits instead.
       const { broker, calls } = makeMockBroker(50000)
       const exec = new OrderExecutor({ broker, loadExecutionConfig: async () => cfg, loadRiskConfig: async () => DEFAULT_RISK_CFG })
 
       await exec.execute(makeOp())
       const main = calls.placeOrder[0]!
-      expect(main.params?.['stopLossPrice']).toBe(49000)
+      expect(main.params?.['stopLoss']).toEqual({ triggerPrice: 49000 })
+      expect(main.params?.['stopLossPrice']).toBeUndefined()
       expect(main.params?.['takeProfitPrice']).toBeUndefined()
+      expect(main.params?.['takeProfit']).toBeUndefined()
     })
 
     it('places ALL TPs (including TP1) as reduce-only limit orders', async () => {

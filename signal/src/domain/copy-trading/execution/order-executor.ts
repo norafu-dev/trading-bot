@@ -189,20 +189,31 @@ export class OrderExecutor {
       }
     }
 
-    // SL rides along on the main order via ccxt unified `stopLossPrice`
-    // param — broker closes the WHOLE position if SL trips, which is
-    // the right semantic ("we're stopped out, exit everything"). TPs
-    // are placed AFTER the main fills, each as a sized reduce-only
-    // limit order so partial fills work as the operator expects (TP1
-    // closes 25%, TP2 closes the next 25%, etc).
+    // SL rides along on the main order as a position-attached preset SL —
+    // broker closes the WHOLE position if SL trips, which is the right
+    // semantic ("we're stopped out, exit everything"). TPs are placed
+    // AFTER the main fills, each as a sized reduce-only limit order so
+    // partial fills work as the operator expects (TP1 closes 25%, TP2
+    // closes the next 25%, etc).
     //
-    // Why TPs are NOT folded into `takeProfitPrice`: that param has no
-    // size argument, so brokers default to "close 100% of the position"
-    // when it triggers — exactly the bug we're fixing here. Placing
-    // sized reduce-only limits gives precise control over multi-TP
-    // ladder distributions.
+    // Why `stopLoss: { triggerPrice }` and not `stopLossPrice`:
+    // ccxt's bitget adapter treats the flat `stopLossPrice` param as a
+    // *standalone* trigger order (planType=pos_loss) and reverse-infers
+    // holdSide from `side` — for `side=buy` it sets holdSide=sell, which
+    // makes Bitget validate the SL as a SHORT position's stop and reject
+    // with code 45122 "Short position stop loss price please > mark
+    // price". The structured `stopLoss: { triggerPrice }` form maps to
+    // Bitget's `presetStopLossPrice`, attached to the main order, with
+    // direction inferred from the order's own side — no misclassification.
+    //
+    // Why TPs are NOT folded into `takeProfit`/`takeProfitPrice`: those
+    // params have no size argument, so brokers default to "close 100%
+    // of the position" when triggered. Sized reduce-only limits give
+    // precise control over multi-TP ladder distributions.
     const params: Record<string, unknown> = {}
-    if (spec.stopLoss?.price) params['stopLossPrice'] = Number(spec.stopLoss.price)
+    if (spec.stopLoss?.price) {
+      params['stopLoss'] = { triggerPrice: Number(spec.stopLoss.price) }
+    }
 
     let mainOrderId: string
     try {

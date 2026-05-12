@@ -334,6 +334,14 @@ function OperationCard({ op, kol, onChanged }: { op: Operation; kol?: KolConfig;
             </div>
           )}
 
+          {/* Conditional-stop note — KOL's original wording when SL was
+              given as a candle-close condition rather than a hard price. */}
+          {spec.action === "placeOrder" && spec.stopLoss?.condition && (
+            <p className="mt-1.5 text-[11px] italic text-muted-foreground">
+              原始止损条件: {spec.stopLoss.condition}
+            </p>
+          )}
+
           {/* Sizing context */}
           {op.sizingContext && (
             <p className="mt-2 text-[11px] text-muted-foreground">
@@ -347,7 +355,7 @@ function OperationCard({ op, kol, onChanged }: { op: Operation; kol?: KolConfig;
           )}
 
           {/* Decision callout — guard / timeout / human / broker */}
-          <DecisionCallout op={op} />
+          <DecisionCallout op={op} onChanged={onChanged} />
 
           {/* Approve / reject controls (pending only) */}
           {op.status === "pending" && (
@@ -436,7 +444,7 @@ function OperationCard({ op, kol, onChanged }: { op: Operation; kol?: KolConfig;
  * isn't visually identical to "guard rejected" — the operator deserves
  * to see "you missed the 5-minute window" called out specifically.
  */
-function DecisionCallout({ op }: { op: Operation }) {
+function DecisionCallout({ op, onChanged }: { op: Operation; onChanged: () => Promise<void> }) {
   // Still pending → no decision to surface yet
   if (op.status === "pending") return null;
 
@@ -458,17 +466,24 @@ function DecisionCallout({ op }: { op: Operation }) {
     minute: "2-digit",
   });
 
-  // Timeout — engine self-rejects after 5 min
+  // Timeout — engine self-rejects after 5 min. Surface a "重新提交"
+  // button so the operator can spawn a fresh approval card with a
+  // refreshed priceCheck (limit-order setups often still actionable
+  // hours after the original signal).
   if (
     op.status === "rejected" &&
     op.lastDecision.by === "engine" &&
     op.lastDecision.reason?.startsWith("approval timeout")
   ) {
     return (
-      <div className="mt-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-xs text-amber-400">
-        <span className="font-medium">⏰ 审批超时自动拒绝</span>
-        <span className="ml-1.5 opacity-80">{ts} · {op.lastDecision.reason}</span>
-      </div>
+      <ResubmittableCallout
+        op={op}
+        ts={ts}
+        onChanged={onChanged}
+        icon="⏰"
+        title="审批超时自动拒绝"
+        tone="amber"
+      />
     );
   }
 
@@ -499,19 +514,102 @@ function DecisionCallout({ op }: { op: Operation }) {
     );
   }
 
-  // Failed — broker rejected, surface category + message
+  // Failed — broker rejected the main order. Resubmit is safe because
+  // executor only flags `failed` when the main order didn't fill (TP-only
+  // failures stay `executed`), so there's no broker-side state to
+  // reconcile. Some error categories (invalid-order, permission) won't
+  // get healed by retry — the operator reads the reason and decides;
+  // MAX_RESUBMITS_PER_SIGNAL caps the chain.
   if (op.status === "failed") {
     return (
-      <div className="mt-2 rounded-md border border-red-500/30 bg-red-500/10 px-2 py-1.5 text-xs text-red-400">
-        <span className="font-medium">⚠️ 执行失败</span>
-        {op.lastDecision.reason && (
-          <span className="ml-1.5 opacity-80">{op.lastDecision.reason}</span>
-        )}
-      </div>
+      <ResubmittableCallout
+        op={op}
+        ts={ts}
+        onChanged={onChanged}
+        icon="⚠️"
+        title="执行失败"
+        tone="red"
+      />
     );
   }
 
   return null;
+}
+
+/**
+ * Resubmittable-decision callout. Used for both approval-timeout and
+ * execution-failed terminal states. The "🔄 重新提交" button re-runs
+ * the original signal through the engine, producing a fresh pending
+ * op with refreshed priceCheck. Guards re-fire so a truly stale signal
+ * (or a config-level invalid-order issue) is still blocked. The chain
+ * is capped by MAX_RESUBMITS_PER_SIGNAL backend-side; clicking past the
+ * cap surfaces the backend error inline.
+ */
+function ResubmittableCallout({
+  op,
+  ts,
+  onChanged,
+  icon,
+  title,
+  tone,
+}: {
+  op: Operation;
+  ts: string;
+  onChanged: () => Promise<void>;
+  icon: string;
+  title: string;
+  tone: "amber" | "red";
+}) {
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const onResubmit = async () => {
+    if (!confirm("确认重新提交这条信号？\n会以最新行情产生一条全新的待审批操作。")) return;
+    setPending(true);
+    setError(null);
+    try {
+      await operationApi.resubmit(op.id);
+      await onChanged();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setPending(false);
+    }
+  };
+
+  // Button uses the same -400 text tier as wrap content so the light-mode
+  // override in globals.css (`text-red-400 → #b91c1c`, `text-amber-400 →
+  // #b45309`) kicks in and the AA contrast is real. -200 had no override
+  // and was unreadable on a white surface. Background steps up from -500/10
+  // (wrap) to -500/25 (button) so the button reads as a distinct affordance.
+  const palette =
+    tone === "red"
+      ? {
+          wrap: "border-red-500/30 bg-red-500/10 text-red-400",
+          btn: "border-red-500/60 bg-red-500/25 text-red-400 hover:bg-red-500/35",
+        }
+      : {
+          wrap: "border-amber-500/30 bg-amber-500/10 text-amber-400",
+          btn: "border-amber-500/60 bg-amber-500/25 text-amber-400 hover:bg-amber-500/35",
+        };
+
+  return (
+    <div className={`mt-2 rounded-md border px-2 py-1.5 text-xs ${palette.wrap}`}>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="font-medium">{icon} {title}</span>
+        <span className="opacity-80">{ts}{op.lastDecision?.reason && ` · ${op.lastDecision.reason}`}</span>
+        <button
+          disabled={pending}
+          onClick={() => void onResubmit()}
+          className={`ml-auto inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${palette.btn}`}
+          title="以最新行情重新生成一条待审批操作；守卫会再次评估"
+        >
+          {pending ? "提交中…" : "🔄 重新提交"}
+        </button>
+      </div>
+      {error && <div className="mt-1 text-red-400">{error}</div>}
+    </div>
+  );
 }
 
 /**

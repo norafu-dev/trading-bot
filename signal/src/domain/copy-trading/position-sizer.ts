@@ -91,6 +91,15 @@ export class PositionSizer {
     // limit orders with no price, which the broker rejects.
     const entryPrice = resolveEntryPrice(signal.entry, signal.side ?? 'long')
 
+    // Resolve stop-loss: prefer explicit `price`, else mine the number out
+    // of `condition` text. KOLs frequently write "4H close under 1.418 for
+    // stops" — LLM correctly captures that as condition but no price, and
+    // the operator's intent (≈ 1.418 as the SL line) is lost. We fall back
+    // to the first plausible-price number in the condition text so the
+    // broker still gets a hard SL; the original condition is forwarded to
+    // the Operation for UI display.
+    const stopLossPrice = resolveStopLossPrice(signal.stopLoss)
+
     const spec: OperationSpec = {
       action: 'placeOrder',
       symbol: normalised?.ccxtSymbol ?? signal.symbol,
@@ -100,7 +109,12 @@ export class PositionSizer {
       ...(entryPrice !== undefined && { price: entryPrice }),
       size: { unit: 'absolute', value: notional.toFixed(2) },
       ...(signal.leverage !== undefined && { leverage: signal.leverage }),
-      ...(signal.stopLoss?.price !== undefined && { stopLoss: { price: signal.stopLoss.price } }),
+      ...(stopLossPrice !== undefined && {
+        stopLoss: {
+          price: stopLossPrice,
+          ...(signal.stopLoss?.condition !== undefined && { condition: signal.stopLoss.condition }),
+        },
+      }),
       ...(truncatedTps && truncatedTps.length > 0 && { takeProfits: truncatedTps }),
     }
 
@@ -164,4 +178,37 @@ function resolveEntryPrice(
     if (low !== undefined) return low
   }
   return undefined
+}
+
+/**
+ * Resolve an executable stop-loss price from a Signal's stopLoss field.
+ *
+ *   1. If `price` is set → return it (the easy, common case).
+ *   2. Else if `condition` is set → extract the first decimal number
+ *      from the condition text. KOLs almost always embed the actual
+ *      SL price into the condition wording ("4H close under 1.418",
+ *      "1H close below 0.0256"), so the first number is reliably the
+ *      threshold. We require a decimal point or at least 3 digits to
+ *      avoid mistaking "1H" / "4H" timeframe markers for prices.
+ *   3. Else → undefined (broker will skip SL — operator's call).
+ *
+ * Why we don't try to model the full conditional semantics: Bitget /
+ * Binance / Bybit don't natively support "candle-close conditional"
+ * stops, so even if we parsed the condition perfectly we'd still
+ * collapse to a fixed-price stop. Better to be explicit about that
+ * collapse in one place (here) and forward the original condition
+ * text to Operation.spec.stopLoss.condition for the operator to see.
+ */
+function resolveStopLossPrice(
+  stopLoss: { price?: string; condition?: string } | undefined,
+): string | undefined {
+  if (!stopLoss) return undefined
+  if (stopLoss.price !== undefined) return stopLoss.price
+  if (stopLoss.condition === undefined) return undefined
+
+  // Look for a number that's either decimal (1.418) or at least 3 digits
+  // long (76500). Single-digit / 2-digit timeframe markers like "1H"/"4H"
+  // won't match because the "H" is non-numeric and the digits are <3.
+  const match = stopLoss.condition.match(/\d+\.\d+|\d{3,}/)
+  return match ? match[0] : undefined
 }

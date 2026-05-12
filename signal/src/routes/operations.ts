@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import type { EventLog } from '../core/event-log.js'
 import type { ApprovalService } from '../domain/copy-trading/approval/approval-service.js'
 import type { IOperationStore } from '../domain/copy-trading/operation-store.js'
+import type { ResubmitService } from '../domain/copy-trading/resubmit-service.js'
 import type { Operation } from '../../../shared/types.js'
 
 /**
@@ -9,6 +10,8 @@ import type { Operation } from '../../../shared/types.js'
  *
  *   GET  /api/operations?limit=200&kolId=...&status=...
  *   PUT  /api/operations/:id/status   { status, reason? }
+ *   POST /api/operations/:id/resubmit  → resubmit a timed-out op as a fresh pending one
+ *   POST /api/operations/:id/resend-card → admin tool: re-emit operation.created
  *
  * GET returns newest-first with status-change events folded in. PUT
  * delegates to ApprovalService.transition so the dashboard, the Telegram
@@ -20,6 +23,7 @@ export function createOperationsRoutes(
   store: IOperationStore,
   approvals: ApprovalService,
   events: EventLog,
+  resubmit: ResubmitService | null,
 ) {
   return new Hono()
     .get('/', async (c) => {
@@ -80,6 +84,54 @@ export function createOperationsRoutes(
           },
           409,
         )
+      }
+      return c.json({ operation: result.operation })
+    })
+    .post('/:id/resubmit', async (c) => {
+      // Re-runs a timed-out operation's signal through the engine, producing
+      // a fresh pending op with a refreshed priceCheck. Useful when the
+      // operator missed the 5-minute window on an otherwise still-actionable
+      // signal (typically a limit waiting on a pullback). Guards re-fire,
+      // so a truly stale signal is still rejected — this is not a guard
+      // bypass.
+      if (!resubmit) {
+        return c.json(
+          { error: 'resubmit unavailable — copy-trading engine not wired (no enabled account?)' },
+          503,
+        )
+      }
+      const id = c.req.param('id')
+      const result = await resubmit.resubmit(id)
+      if (!result.ok) {
+        switch (result.code) {
+          case 'op-not-found':
+            return c.json({ error: 'operation not found' }, 404)
+          case 'signal-not-found':
+            return c.json(
+              { error: `original signal ${result.signalId} not found in signals.jsonl` },
+              404,
+            )
+          case 'kol-not-found':
+            return c.json({ error: `KOL ${result.kolId} no longer registered` }, 404)
+          case 'not-resubmittable':
+            return c.json(
+              {
+                error: 'only approval-timeout or execution-failed ops can be resubmitted',
+                currentStatus: result.currentStatus,
+                lastDecisionBy: result.lastDecisionBy,
+                lastDecisionReason: result.lastDecisionReason,
+              },
+              409,
+            )
+          case 'max-attempts-reached':
+            return c.json(
+              {
+                error: `signal has already been submitted ${result.attemptCount} times (max reached)`,
+                attemptCount: result.attemptCount,
+              },
+              409,
+            )
+        }
       }
       return c.json({ operation: result.operation })
     })

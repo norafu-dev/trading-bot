@@ -588,7 +588,18 @@ export type OperationSpec =
         value: string
       }
       leverage?: number
-      stopLoss?: { price: string }
+      stopLoss?: {
+        price: string
+        /**
+         * Original conditional-stop wording from the KOL (e.g.
+         * "4H close under 1.418"). Surfaced on the approval card so
+         * the operator sees the KOL's intent even though the broker
+         * will only honour the fixed `price` —— exchanges don't
+         * support "candle-close" conditional triggers natively.
+         * Absent when the KOL gave a plain price with no condition.
+         */
+        condition?: string
+      }
       takeProfits?: Array<{ level: number; price: string }>
     }
   | {

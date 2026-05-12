@@ -434,6 +434,10 @@ export const operationApi = {
       method: "PUT",
       body: JSON.stringify({ status, ...(reason !== undefined && { reason }) }),
     }),
+  resubmit: (id: string) =>
+    api<{ operation: Operation }>(`/operations/${encodeURIComponent(id)}/resubmit`, {
+      method: "POST",
+    }),
 };
 
 // ==================== Risk Config API ====================

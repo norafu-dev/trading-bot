@@ -42,13 +42,16 @@ export interface LiveQuoteSnapshot {
 }
 
 export interface ParsedCallbackData {
-  action: 'approve' | 'reject'
+  action: 'approve' | 'reject' | 'resubmit'
   operationId: string
 }
 
 const CALLBACK_PREFIX = 'op'
 
-export function encodeCallback(action: 'approve' | 'reject', operationId: string): string {
+export function encodeCallback(
+  action: 'approve' | 'reject' | 'resubmit',
+  operationId: string,
+): string {
   return `${CALLBACK_PREFIX}:${action}:${operationId}`
 }
 
@@ -56,9 +59,22 @@ export function parseCallback(data: string): ParsedCallbackData | null {
   const parts = data.split(':')
   if (parts.length !== 3 || parts[0] !== CALLBACK_PREFIX) return null
   const action = parts[1]
-  if (action !== 'approve' && action !== 'reject') return null
+  if (action !== 'approve' && action !== 'reject' && action !== 'resubmit') return null
   if (!parts[2]) return null
   return { action, operationId: parts[2] }
+}
+
+/**
+ * Inline-keyboard markup attached to a resolved card whose rejection
+ * was an approval timeout. Lets the operator spawn a fresh attempt
+ * from the chat without opening the dashboard.
+ */
+export function resubmitKeyboard(operationId: string): TgInlineKeyboardMarkup {
+  return {
+    inline_keyboard: [
+      [{ text: '🔄 重新提交', callback_data: encodeCallback('resubmit', operationId) }],
+    ],
+  }
 }
 
 /**
@@ -252,12 +268,20 @@ function renderPriceLadder(
   }
 
   // SL — distance from slTpBasis (entry for limit, live for market).
+  // If the KOL's SL was conditional (e.g. "4H close under 1.418"), the
+  // sizer mined the price out of the condition and forwarded the original
+  // condition text. Surface both so the operator sees the KOL's actual
+  // intent (broker will only honour the fixed price — exchanges don't
+  // support candle-close conditional triggers).
   if (spec.stopLoss?.price) {
     const slNum = Number(spec.stopLoss.price)
     const distLabel = slTpBasis !== null && Number.isFinite(slNum) && slNum > 0
       ? `  \`${formatSignedPct(((slNum - slTpBasis) / slTpBasis) * 100 * dirSign)}\``
       : ''
     lines.push(`🛑 止损 \`${escape(spec.stopLoss.price)}\`${distLabel}`)
+    if (spec.stopLoss.condition) {
+      lines.push(`_  原始条件: ${escape(spec.stopLoss.condition)}_`)
+    }
   }
 
   // TPs — distance from slTpBasis. One per line for readability.

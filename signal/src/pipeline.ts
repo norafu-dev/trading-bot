@@ -54,6 +54,7 @@ import type { IOperationStore } from './domain/copy-trading/operation-store.js'
 import { OperationStore } from './domain/copy-trading/operation-store.js'
 import { ApprovalService } from './domain/copy-trading/approval/approval-service.js'
 import { ApprovalTimeouts } from './domain/copy-trading/approval/approval-timeouts.js'
+import { ResubmitService } from './domain/copy-trading/resubmit-service.js'
 import { BrokerDispatcher } from './domain/copy-trading/execution/broker-dispatcher.js'
 import { CcxtCryptoBroker } from './domain/copy-trading/execution/crypto-broker.js'
 import { OrderExecutor } from './domain/copy-trading/execution/order-executor.js'
@@ -119,6 +120,13 @@ export interface SignalPipeline {
    * one validation + persistence path.
    */
   approvalService: ApprovalService
+
+  /**
+   * Resubmit a timed-out operation by re-running its signal through the
+   * engine. Null when copy-trading isn't wired (no enabled CCXT account)
+   * — routes return 503 in that state.
+   */
+  resubmitService: ResubmitService | null
 }
 
 /**
@@ -259,6 +267,19 @@ export async function createPipeline(deps: PipelineDeps = {}): Promise<SignalPip
   // ── 7b. Approval service — shared by routes, telegram, and timeouts
   const approvalService = new ApprovalService(operationStore, eventLog)
 
+  // ── 7b'. Resubmit service — runs a timed-out op's signal through the
+  // engine again. Shares the same SignalStore the router writes to so
+  // it can recover the original Signal record by id, and shares the
+  // priceService so the refreshed priceCheck uses the same data source.
+  const resubmitService = new ResubmitService({
+    store: operationStore,
+    signalStore,
+    engine,
+    events: eventLog,
+    getKol: (kolId) => kolRegistry.get(kolId) ?? undefined,
+    ...(deps.priceService && { priceService: deps.priceService }),
+  })
+
   // ── 7c. Telegram approval surface — best-effort. If config is missing
   // or the bot can't be reached, the rest of the pipeline still runs and
   // the dashboard remains the only approval surface.
@@ -267,7 +288,7 @@ export async function createPipeline(deps: PipelineDeps = {}): Promise<SignalPip
   let telegramListener: TelegramListener | null = null
   if (telegramConfig.enabled && telegramConfig.botToken && telegramConfig.chatId !== 0) {
     const tgClient = new TelegramClient({ botToken: telegramConfig.botToken })
-    telegramNotifier = new TelegramNotifier({
+    const notifier = new TelegramNotifier({
       client: tgClient,
       chatId: telegramConfig.chatId,
       events: eventLog,
@@ -275,10 +296,13 @@ export async function createPipeline(deps: PipelineDeps = {}): Promise<SignalPip
       kolRegistry,
       ...(deps.priceService && { priceService: deps.priceService }),
     })
+    telegramNotifier = notifier
     telegramListener = new TelegramListener({
       client: tgClient,
       chatId: telegramConfig.chatId,
       approvals: approvalService,
+      resubmit: resubmitService,
+      clearKeyboard: (opId) => notifier.clearKeyboard(opId),
     })
     await telegramNotifier.start()
     await telegramListener.start()
@@ -480,6 +504,7 @@ export async function createPipeline(deps: PipelineDeps = {}): Promise<SignalPip
     operationStore,
     eventLog,
     approvalService,
+    resubmitService,
   }
 }
 

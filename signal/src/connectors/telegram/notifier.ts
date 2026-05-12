@@ -29,7 +29,8 @@ import { logger } from '../../core/logger.js'
 import { PATHS } from '../../core/paths.js'
 import type { KolRegistry } from '../../domain/signals/kol/registry.js'
 import type { IOperationStore } from '../../domain/copy-trading/operation-store.js'
-import { renderApprovalCard, renderResolvedText } from './card-renderer.js'
+import { isResubmittable } from '../../domain/copy-trading/resubmit-service.js'
+import { renderApprovalCard, renderResolvedText, resubmitKeyboard } from './card-renderer.js'
 import type { TelegramClient } from './client.js'
 import { TelegramApiError } from './client.js'
 
@@ -113,6 +114,51 @@ export class TelegramNotifier {
     return this.mapping[operationId]
   }
 
+  /**
+   * Strip the keyboard off a card AFTER its operator has resubmitted —
+   * stops them from double-tapping the same 🔄 button and getting
+   * `max-attempts-reached` errors. Best-effort: a Telegram failure
+   * here is logged but doesn't propagate (the resubmit itself already
+   * succeeded; the spawned new card is what matters).
+   */
+  async clearKeyboard(operationId: string): Promise<void> {
+    const location = this.mapping[operationId]
+    if (!location) return
+    const all = await this.deps.store.readAllOperations()
+    const op = all.find((o) => o.id === operationId)
+    if (!op) return
+    const kol = this.deps.kolRegistry.get(op.kolId) ?? undefined
+    // Re-render with the same resolved text but no keyboard. We append a
+    // small "已重新提交" suffix so the operator can tell which old card
+    // they already actioned without having to scroll to find the new one.
+    const baseText = renderResolvedText(op, kol, {
+      by: op.lastDecision?.by ?? 'engine',
+      at: op.lastDecision?.at ?? new Date().toISOString(),
+      ...(op.lastDecision?.reason !== undefined && { reason: op.lastDecision.reason }),
+    })
+    const text = `${baseText}\n\n_🔄 已重新提交_`
+    try {
+      await this.deps.client.editMessageText({
+        chatId: location.chatId,
+        messageId: location.messageId,
+        text,
+        // No replyMarkup → keyboard cleared.
+      })
+    } catch (err) {
+      if (
+        err instanceof TelegramApiError &&
+        (err.message.includes('message is not modified') ||
+          err.message.includes('message to edit not found'))
+      ) {
+        return
+      }
+      logger.warn(
+        { err, operationId },
+        'TelegramNotifier: failed to clear keyboard on resubmitted card',
+      )
+    }
+  }
+
   // ── Handlers ─────────────────────────────────────────────────────────────
 
   private async handleCreated(entry: EventLogEntry<OperationCreatedPayload>): Promise<void> {
@@ -183,12 +229,19 @@ export class TelegramNotifier {
     const kol = this.deps.kolRegistry.get(op.kolId) ?? undefined
     const text = renderResolvedText(op, kol, { by, at, reason })
 
+    // If the resolved op is resubmittable (approval timeout OR broker
+    // execution failure), leave a single "重新提交" button on the card
+    // so the operator can spawn a fresh attempt from chat without
+    // opening the dashboard. Other terminal statuses drop the keyboard
+    // entirely (decision recorded, no further action available).
+    const replyMarkup = isResubmittable(op) ? resubmitKeyboard(op.id) : undefined
+
     try {
       await this.deps.client.editMessageText({
         chatId: location.chatId,
         messageId: location.messageId,
         text,
-        // Drop the keyboard — decision recorded.
+        ...(replyMarkup && { replyMarkup }),
       })
     } catch (err) {
       // "message is not modified" / "message to edit not found" are not

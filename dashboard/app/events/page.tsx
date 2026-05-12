@@ -56,6 +56,11 @@ const TYPE_META: Record<string, { label: string; className: string; icon: string
     className: "bg-purple-500/10 text-purple-300 border-purple-500/20",
     icon: "↻",
   },
+  "operation.resubmitted": {
+    label: "operation.resubmitted",
+    className: "bg-amber-500/15 text-amber-300 border-amber-500/30",
+    icon: "🔄",
+  },
   // ── Execution layer ──────────────────────────────────────────────
   "trade.executed": {
     label: "trade.executed",
@@ -80,6 +85,7 @@ const TYPE_FILTER_OPTIONS = [
   { value: "parse.failed", label: "❌ 解析失败" },
   { value: "operation.created", label: "⚙️ 新操作" },
   { value: "operation.status-changed", label: "↻ 状态变更" },
+  { value: "operation.resubmitted", label: "🔄 重新提交" },
   { value: "trade.executed", label: "🟢 已执行" },
   { value: "trade.failed", label: "⚠️ 执行失败" },
 ];
@@ -356,6 +362,16 @@ function renderSummary(entry: EventEntry, _kolLabel?: string): string {
         by && `by ${by}`,
         reason && `· ${reason}`,
         opId && `id=${opId.slice(-8)}`,
+      ].filter(Boolean).join("  ");
+    }
+    case "operation.resubmitted": {
+      const originalId = p.originalOperationId as string | undefined;
+      const newId = p.newOperationId as string | undefined;
+      const attempt = p.attemptNumber as number | undefined;
+      return [
+        attempt !== undefined && `第 ${attempt} 次提交`,
+        originalId && `from ${originalId.slice(-8)}`,
+        newId && `→ ${newId.slice(-8)}`,
       ].filter(Boolean).join("  ");
     }
     case "trade.executed": {

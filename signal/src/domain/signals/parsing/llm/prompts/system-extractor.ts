@@ -35,6 +35,15 @@ entry.price    — Single entry price as a decimal string, e.g. "76500".
 entry.priceRangeLow / priceRangeHigh — When a price range is given instead of a single price.
 stopLoss.price — Fixed stop-loss price as a decimal string.
 stopLoss.condition — Conditional stop description, e.g. "1H close under 0.0256".
+                     IMPORTANT: when a conditional stop embeds an explicit price
+                     (the vast majority — "4H close under 1.418 for stops",
+                     "1H close below 0.0256"), populate BOTH stopLoss.price (the
+                     embedded number) AND stopLoss.condition (the original
+                     wording). The operator will execute against the price;
+                     the condition text is shown on the approval card so the
+                     original KOL intent is visible. Only omit stopLoss.price
+                     when the condition truly has no embeddable threshold
+                     (rare — e.g. "stop if macro news triggers risk-off").
 takeProfits    — Array of { level: 1|2|3…, price: "…" }. TP1 = level 1.
 leverage       — Leverage multiplier as an integer (1 = no leverage).
 size.type      — "percent" if expressed as % of account; "absolute" for notional amount.

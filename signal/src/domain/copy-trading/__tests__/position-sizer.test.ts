@@ -302,4 +302,106 @@ describe('PositionSizer', () => {
       expect(op.spec.price).toBeUndefined()
     })
   })
+
+  // ── Stop-loss extraction from conditional wording ──────────────────
+  // KOLs frequently write SL as a candle-close condition like
+  // "4H close under 1.418 for stops" — LLM captures it as
+  // stopLoss.condition with no price. Without a fallback, the operation
+  // would carry no SL and the broker would open an unprotected position.
+  // Sizer mines the price out of the condition text; the original
+  // wording is forwarded to op.spec.stopLoss.condition for UI display.
+  describe('stop-loss extraction', () => {
+    it('explicit price passes through, no condition attached', () => {
+      const op = sizer.size({
+        signal: makeSignal({ stopLoss: { price: '75500' } }),
+        kol: makeKol(),
+        account: makeAccount(),
+        riskConfig: DEFAULT_RISK,
+      })
+      if (op.spec.action !== 'placeOrder') throw new Error()
+      expect(op.spec.stopLoss).toEqual({ price: '75500' })
+    })
+
+    it('explicit price wins over condition when both are given', () => {
+      const op = sizer.size({
+        signal: makeSignal({
+          stopLoss: { price: '75500', condition: '4H close under 75000' },
+        }),
+        kol: makeKol(),
+        account: makeAccount(),
+        riskConfig: DEFAULT_RISK,
+      })
+      if (op.spec.action !== 'placeOrder') throw new Error()
+      expect(op.spec.stopLoss).toEqual({
+        price: '75500',
+        condition: '4H close under 75000',
+      })
+    })
+
+    it('mines decimal price out of "4H close under 1.418" (Trader Neil pattern)', () => {
+      const op = sizer.size({
+        signal: makeSignal({
+          stopLoss: { condition: '4H close under 1.418 for stops' },
+        }),
+        kol: makeKol(),
+        account: makeAccount(),
+        riskConfig: DEFAULT_RISK,
+      })
+      if (op.spec.action !== 'placeOrder') throw new Error()
+      expect(op.spec.stopLoss?.price).toBe('1.418')
+      expect(op.spec.stopLoss?.condition).toBe('4H close under 1.418 for stops')
+    })
+
+    it('mines 3+ digit integer price out of "close below 76500"', () => {
+      const op = sizer.size({
+        signal: makeSignal({
+          stopLoss: { condition: '1H close below 76500' },
+        }),
+        kol: makeKol(),
+        account: makeAccount(),
+        riskConfig: DEFAULT_RISK,
+      })
+      if (op.spec.action !== 'placeOrder') throw new Error()
+      expect(op.spec.stopLoss?.price).toBe('76500')
+    })
+
+    it('ignores timeframe markers like "1H" / "4H" — picks the price, not the timeframe', () => {
+      // Regex requires either a decimal or 3+ digit integer, so "4" in
+      // "4H" can't be mistaken for a price.
+      const op = sizer.size({
+        signal: makeSignal({
+          stopLoss: { condition: '4H close under 0.0256' },
+        }),
+        kol: makeKol(),
+        account: makeAccount(),
+        riskConfig: DEFAULT_RISK,
+      })
+      if (op.spec.action !== 'placeOrder') throw new Error()
+      expect(op.spec.stopLoss?.price).toBe('0.0256')
+    })
+
+    it('omits SL when condition has no extractable price (rare)', () => {
+      const op = sizer.size({
+        signal: makeSignal({
+          stopLoss: { condition: 'stop if macro news triggers risk-off' },
+        }),
+        kol: makeKol(),
+        account: makeAccount(),
+        riskConfig: DEFAULT_RISK,
+      })
+      if (op.spec.action !== 'placeOrder') throw new Error()
+      expect(op.spec.stopLoss).toBeUndefined()
+    })
+
+    it('omits SL when signal has no stopLoss at all', () => {
+      const op = sizer.size({
+        signal: makeSignal({ stopLoss: undefined }),
+        kol: makeKol(),
+        account: makeAccount(),
+        riskConfig: DEFAULT_RISK,
+      })
+      if (op.spec.action !== 'placeOrder') throw new Error()
+      expect(op.spec.stopLoss).toBeUndefined()
+    })
+  })
 })

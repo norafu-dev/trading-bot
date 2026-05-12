@@ -29,6 +29,7 @@ import { dirname, join } from 'node:path'
 import { logger } from '../../core/logger.js'
 import { PATHS } from '../../core/paths.js'
 import type { ApprovalService } from '../../domain/copy-trading/approval/approval-service.js'
+import type { ResubmitService } from '../../domain/copy-trading/resubmit-service.js'
 import { parseCallback } from './card-renderer.js'
 import type { TelegramClient, TgCallbackQuery } from './client.js'
 import { TelegramApiError } from './client.js'
@@ -43,6 +44,20 @@ export interface TelegramListenerDeps {
   /** Only accept callbacks from this chat. Anything else is ignored. */
   chatId: number
   approvals: ApprovalService
+  /**
+   * Optional. When wired, the listener handles 🔄 重新提交 taps by
+   * calling ResubmitService and stripping the old card's keyboard so
+   * the operator can't accidentally double-tap. Without it the resubmit
+   * button is functionally dead (button taps still get an ack toast,
+   * but no new op is created).
+   */
+  resubmit?: ResubmitService
+  /**
+   * Optional. Lets the listener strip the keyboard off the old card
+   * after a successful resubmit so the operator can't double-tap.
+   * Best-effort; failures don't block the resubmit itself.
+   */
+  clearKeyboard?: (operationId: string) => Promise<void>
 }
 
 export class TelegramListener {
@@ -124,7 +139,13 @@ export class TelegramListener {
       return
     }
 
-    // 3. Run the transition. ApprovalService validates the source state.
+    // 3. Dispatch on action type.
+    if (parsed.action === 'resubmit') {
+      await this.handleResubmit(query, parsed.operationId)
+      return
+    }
+
+    // approve / reject — run through ApprovalService.
     const result = await this.deps.approvals.transition({
       operationId: parsed.operationId,
       newStatus: parsed.action === 'approve' ? 'approved' : 'rejected',
@@ -158,6 +179,53 @@ export class TelegramListener {
     // The notifier (subscribed to operation.status-changed) will edit
     // the card. We don't do it here so the timeout-driven path produces
     // identical visual output.
+  }
+
+  /**
+   * Handle a 🔄 重新提交 tap. The resubmit service re-runs the original
+   * signal through the engine; a fresh `operation.created` event lights
+   * up a new approval card via the notifier. The old card has its
+   * keyboard stripped so the operator can't double-tap.
+   */
+  private async handleResubmit(query: TgCallbackQuery, operationId: string): Promise<void> {
+    if (!this.deps.resubmit) {
+      await this.ack(query.id, '重新提交不可用。')
+      return
+    }
+    const result = await this.deps.resubmit.resubmit(operationId)
+    if (!result.ok) {
+      const toast = this.resubmitErrorToast(result)
+      await this.ack(query.id, toast)
+      return
+    }
+    await this.ack(query.id, '已重新提交。')
+    if (this.deps.clearKeyboard) {
+      // Best-effort; even a Telegram outage here just leaves the old
+      // button visible — the new card is already on its way via the
+      // notifier's operation.created subscription.
+      try {
+        await this.deps.clearKeyboard(operationId)
+      } catch (err) {
+        logger.warn({ err, operationId }, 'TelegramListener: clearKeyboard failed (cosmetic)')
+      }
+    }
+  }
+
+  private resubmitErrorToast(
+    result: Exclude<Awaited<ReturnType<ResubmitService['resubmit']>>, { ok: true }>,
+  ): string {
+    switch (result.code) {
+      case 'op-not-found':
+        return '未找到该操作。'
+      case 'signal-not-found':
+        return '原始信号已丢失，无法重提。'
+      case 'kol-not-found':
+        return 'KOL 已被移除。'
+      case 'not-resubmittable':
+        return '仅超时被拒或执行失败的操作可重新提交。'
+      case 'max-attempts-reached':
+        return `已达上限（已提交 ${result.attemptCount} 次）。`
+    }
   }
 
   private async ack(callbackQueryId: string, toast?: string): Promise<void> {
